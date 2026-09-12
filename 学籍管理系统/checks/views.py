@@ -10,8 +10,9 @@ from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q, F, Prefetch
-from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
+from django.http import HttpResponse, HttpResponseForbidden, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST, require_GET
 from .crypto import encrypt, decrypt, identity, digest, normalize
@@ -72,16 +73,41 @@ def captcha(request):
 def logout(request):
     request.session.flush();return redirect('login')
 
-def field_rows(student,fields,checks,errors=None):
+def region_initial(value):
+    selected = {'province_index': '', 'city_index': '', 'district_value': '', 'cities': [], 'districts': []}
+    for province_index, province in enumerate(REGION_TREE):
+        for city_index, city in enumerate(province['cities']):
+            for district in city['districts']:
+                if district['value'] == value:
+                    selected.update({
+                        'province_index': province_index,
+                        'city_index': city_index,
+                        'district_value': value,
+                        'cities': province['cities'],
+                        'districts': city['districts'],
+                    })
+                    return selected
+    return selected
+
+
+def group_index_for(key):
+    return next((index for index, fields in enumerate(GROUPS, 1) if any(field['key'] == key for field in fields)), 1)
+
+
+def field_rows(student,fields,checks,errors=None,revealed_key=None):
     base=student.current();rows=[];errors=errors or {}
     first_error_key=next((f['key'] for f in fields if f['key'] in errors),None)
     for f in fields:
         k=f['key'];item=checks.get(k,{});value=check_value(base,f,item);sensitive=k in SENSITIVE
+        sensitive_loaded = sensitive and (not value or k == revealed_key)
         row={**f,'label':f['label'].replace('*',''),'current':value,'sensitive':sensitive,
              'display':(value[:3]+'********'+value[-4:]) if sensitive and value else value,
-             'result':check_status(f,item),'new':'' if sensitive else value,'note':item.get('note',''),
+             'result':check_status(f,item),'new':value if sensitive_loaded else ('' if sensitive else value),'note':item.get('note',''),
+             'sensitive_loaded':sensitive_loaded,
              'error':errors.get(k),'first_error':k==first_error_key,
              'region':k in REGION_KEYS,'long_options':len(f['options'])>30}
+        if row['region']:
+            row['region_initial'] = region_initial(row['new'])
         if k=='D':
             v=row['new'].replace('-','');row['new']=f'{v[:4]}-{v[4:6]}-{v[6:]}' if len(v)==8 else row['new']
         rows.append(row)
@@ -93,34 +119,102 @@ def step(request,index):
     if request.student.status=='submitted':return redirect('result')
     fields=GROUPS[index-1]; errors={}; notice=''
     if request.method=='POST':
-        checks={}
-        for f in fields:
-            key=f['key']; value_key='value_'+key
-            item={'result':request.POST.get('result_'+key,''),
-                  'note':request.POST.get('note_'+key,''),
-                  'loaded':request.POST.get('loaded_'+key)=='1'}
-            # A form opened before Y became editable has no value_Y control. Keep the
-            # current value when that stale page is submitted during the rolling release.
-            if value_key in request.POST:item['value']=request.POST.get(value_key,'')
-            checks[key]=item
-        for k in SENSITIVE:
-            if k in checks and 'value' in checks[k]:checks[k]['value']=checks[k]['value'].upper()
-        try:
-            request.student=save_draft(request.student.pk,int(request.POST.get('revision','-1')),checks,fields)
-            if request.POST.get('action')=='save': messages.success(request,'本步草稿已保存，可稍后继续。')
-            else:
-                _,errors=validate_checks(request.student.current(),request.student.draft,fields)
-                if not errors:return redirect('step',index=index+1) if index<len(GROUPS) else redirect('confirm')
-        except ValueError as exc:notice=str(exc)
+        action=request.POST.get('action','next')
+        field_keys={field['key'] for field in fields}
+        special_key=action.split(':',1)[1] if ':' in action else ''
+        valid_action=(action in {'save','next'} or
+                      (action.startswith('compat-region:') and special_key in REGION_KEYS and special_key in field_keys) or
+                      (action.startswith('reveal-sensitive:') and special_key in SENSITIVE and special_key in field_keys))
+        if not valid_action:
+            notice='无法识别本次操作，请刷新页面后重试。'
+        else:
+            checks={}
+            for f in fields:
+                key=f['key']; value_key='value_'+key
+                item={'result':request.POST.get('result_'+key,''),
+                      'note':request.POST.get('note_'+key,''),
+                      'loaded':request.POST.get('loaded_'+key)=='1'}
+                # A form opened before Y became editable has no value_Y control. Keep the
+                # current value when that stale page is submitted during the rolling release.
+                if value_key in request.POST:item['value']=request.POST.get(value_key,'')
+                checks[key]=item
+            for k in SENSITIVE:
+                if k in checks and 'value' in checks[k]:checks[k]['value']=checks[k]['value'].upper()
+            # Opening the server-side region picker must not replace a previously saved
+            # value with an incomplete province/city selection from the current page.
+            if action.startswith('compat-region:'):checks[special_key].pop('value',None)
+            try:
+                request.student=save_draft(request.student.pk,int(request.POST.get('revision','-1')),checks,fields)
+                if action.startswith('compat-region:'):
+                    return redirect('region_compat',key=special_key)
+                if action.startswith('reveal-sensitive:'):
+                    url=reverse('step',args=[index])+'?reveal='+quote(special_key)+'#field-'+quote(special_key)
+                    return HttpResponseRedirect(url)
+                if action=='save': messages.success(request,'本步草稿已保存，可稍后继续。')
+                else:
+                    _,errors=validate_checks(request.student.current(),request.student.draft,fields)
+                    if not errors:return redirect('step',index=index+1) if index<len(GROUPS) else redirect('confirm')
+            except ValueError as exc:notice=str(exc)
     checks=request.student.draft
+    revealed_key=request.GET.get('reveal','')
+    if revealed_key not in SENSITIVE or not any(field['key']==revealed_key for field in fields):revealed_key=None
     return render(request,'step.html',{'student':request.student,'index':index,'title':GROUP_NAMES[index-1],
-                   'rows':field_rows(request.student,fields,checks,errors),'notice':notice,'error_count':len(errors),'progress':index*20,
+                   'rows':field_rows(request.student,fields,checks,errors,revealed_key),'notice':notice,'error_count':len(errors),'progress':index*20,
                    'region_tree':REGION_TREE,'has_regions':any(f['key'] in REGION_KEYS for f in fields)})
 
 @parent_required
 def reveal(request,key):
     if key not in SENSITIVE:return HttpResponseForbidden()
     return JsonResponse({'value':check_value(request.student.current(),BY_KEY[key],request.student.draft.get(key,{}))})
+
+
+@parent_required
+def region_compat(request,key):
+    if key not in REGION_KEYS or key not in BY_KEY or BY_KEY[key]['readonly']:
+        return HttpResponseForbidden()
+    if request.student.status=='submitted':return redirect('result')
+    field=BY_KEY[key]; notice=''; selected_value=''
+    if request.method=='POST':
+        selected_value=request.POST.get('value','')
+        if selected_value not in field['options']:
+            notice='请选择列表中的完整行政区划。'
+        else:
+            try:
+                request.student=save_draft(
+                    request.student.pk,
+                    int(request.POST.get('revision','-1')),
+                    {key:{'result':'unconfirmed','value':selected_value,'mode':'direct'}},
+                    [field],
+                )
+                index=group_index_for(key)
+                return HttpResponseRedirect(reverse('step',args=[index])+'#field-'+quote(key))
+            except ValueError as exc:notice=str(exc)
+
+    query=request.GET.get('q','').strip()[:50]
+    province_raw=request.GET.get('province','')
+    city_raw=request.GET.get('city','')
+    province_index=int(province_raw) if province_raw.isdigit() and int(province_raw)<len(REGION_TREE) else None
+    province=REGION_TREE[province_index] if province_index is not None else None
+    city_index=int(city_raw) if province and city_raw.isdigit() and int(city_raw)<len(province['cities']) else None
+    city=province['cities'][city_index] if city_index is not None else None
+    results=[]
+    if query:
+        for p_index,p in enumerate(REGION_TREE):
+            for c_index,c in enumerate(p['cities']):
+                for district in c['districts']:
+                    haystack=p['name']+c['name']+district['name']+district['value']
+                    if query in haystack:
+                        results.append({'value':district['value'],'label':district['value'],'province_index':p_index,'city_index':c_index})
+                        if len(results)>=100:break
+                if len(results)>=100:break
+            if len(results)>=100:break
+    current=check_value(request.student.current(),field,request.student.draft.get(key,{}))
+    return render(request,'region_compat.html',{
+        'student':request.student,'field':field,'key':key,'notice':notice,'current':current,
+        'region_tree':REGION_TREE,'province_index':province_index,'province':province,
+        'city_index':city_index,'city':city,'query':query,'results':results,'selected_value':selected_value,
+        'return_index':group_index_for(key),
+    })
 
 @parent_required
 def confirm(request):

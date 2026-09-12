@@ -8,7 +8,7 @@ function session(admin=false){
 }
 (async()=>{
  const browser=await chromium.launch({headless:true,channel:'msedge'});const out=path.join(root,'artifacts');fs.mkdirSync(out,{recursive:true});
- const context=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:1});const page=await context.newPage();const errors=[];
+ const context=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:3,isMobile:true,hasTouch:true});const page=await context.newPage();const errors=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('response',r=>{if(r.status()>=500)errors.push(r.status()+' '+r.url())});
  await page.goto(base+'/xueji/');await page.screenshot({path:path.join(out,'mobile-login.png'),fullPage:true});
  if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Mobile overflow');
@@ -26,7 +26,20 @@ function session(admin=false){
  await page.goto(base+'/xueji/progress/benbu/');await page.getByRole('heading',{name:'本部学生总表'}).waitFor();
  if(await page.locator('.class-progress-card').count())throw Error('Head-campus page still groups students by class');
  if(await page.locator('tbody tr').count()!==1)throw Error('Head-campus total table contains the wrong population');
- await context.addCookies([{name:'xueji_session',value:session(),domain:'127.0.0.1',path:'/xueji/'}]);
+ const parentSession=session();
+ await context.addCookies([{name:'xueji_session',value:parentSession,domain:'127.0.0.1',path:'/xueji/'}]);
+ const nojs=await browser.newContext({viewport:{width:375,height:812},deviceScaleFactor:3,isMobile:true,hasTouch:true,javaScriptEnabled:false});
+ await nojs.addCookies([{name:'xueji_session',value:parentSession,domain:'127.0.0.1',path:'/xueji/'}]);
+ const nojsPage=await nojs.newPage();await nojsPage.goto(base+'/xueji/check/1/');
+ if(await nojsPage.locator('[data-field="E"] [data-region-province] option').count()!==35)throw Error('Server-rendered province fallback missing');
+ if(!await nojsPage.getByRole('button',{name:/使用地区搜索/}).first().isVisible())throw Error('No-JavaScript region fallback missing');
+ if(!await nojsPage.getByRole('button',{name:/显示完整号码并修改/}).first().isVisible())throw Error('No-JavaScript sensitive fallback missing');
+ await nojs.close();
+ for(const width of [320,360,375,390,414,430]){
+   await page.setViewportSize({width,height:844});await page.goto(base+'/xueji/check/1/');
+   if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Step overflow at '+width+'px');
+ }
+ await page.setViewportSize({width:390,height:844});
  for(let i=1;i<=5;i++){
    await page.goto(base+'/xueji/check/'+i+'/');
    if(page.url().includes('result'))throw Error('Demo student already submitted; reopen locally for QA');
@@ -54,7 +67,7 @@ function session(admin=false){
    }
    if(i===2){await page.locator('[name=result_V][value=unconfirmed]').check();await page.locator('[name=note_V]').fill('演示核实班级');}
    if(i===2){await page.locator('[name=value_AA]').fill('演示新住址 88 号（虚构）');await page.locator('[name=result_AA][value=confirmed]').check();}
-   if(i===1){await page.getByText('显示并修改号码',{exact:true}).click();await page.locator('[name=value_J]').waitFor();if(await page.locator('[name=value_J]').inputValue()!=='DEMO2026001')throw Error('Sensitive value not loaded');await page.screenshot({path:path.join(out,'mobile-check.png'),fullPage:true});}
+   if(i===1){await page.getByText('显示完整号码并修改',{exact:true}).click();await page.locator('[name=value_J]').waitFor();if(await page.locator('[name=value_J]').inputValue()!=='DEMO2026001')throw Error('Sensitive value not loaded');await page.screenshot({path:path.join(out,'mobile-check.png'),fullPage:true});}
    if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Step overflow '+i);
    await page.getByRole('button',{name:/保存并进入下一步/}).click();
  }
@@ -76,8 +89,10 @@ function session(admin=false){
  await page.goto(base+'/xueji/manage/');
  await page.getByRole('link',{name:'查看',exact:true}).first().click();await page.getByRole('heading',{name:'学校维护字段'}).waitFor();
  if(errors.length)throw Error(errors.join('\n'));
- console.log(JSON.stringify({passed:true,checks:['mobile login','public class pending list','public privacy boundary','separate head-campus population','nationwide cascading regions','5 step direct edit','confirmation states','sensitive edit','readonly issue','address correction','signature submit','admin dashboard','standalone class pending list','no admin links from standalone view','student detail','no horizontal overflow','no JS or HTTP 5xx'],screenshots:7}));
+ console.log(JSON.stringify({passed:true,checks:['mobile login','public class pending list','public privacy boundary','separate head-campus population','server-rendered no-JavaScript fallback','320-430px mobile widths','nationwide cascading regions','5 step direct edit','confirmation states','sensitive edit','readonly issue','address correction','signature submit','admin dashboard','standalone class pending list','no admin links from standalone view','student detail','no horizontal overflow','no JS or HTTP 5xx'],screenshots:7}));
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});
 
 async function canvasReady(page){return page.locator('#signature-pad').getAttribute('data-ready');}
+
+

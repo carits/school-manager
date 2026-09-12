@@ -66,7 +66,7 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_HSTS_SECONDS = 31536000 if HTTPS_ENABLED else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False
-# Subdomain HSTS and preload remain disabled so deployment policy can be chosen separately.
+# The production endpoint is a bare IP, so subdomain HSTS and preload do not apply.
 SILENCED_SYSTEM_CHECKS = ['security.W005', 'security.W021'] if HTTPS_ENABLED else []
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = 'same-origin'

@@ -12,7 +12,7 @@ from django.db import IntegrityError, transaction
 from django.urls import reverse
 from .models import Batch,Student,Submission,ImportPreview
 from .crypto import encrypt,decrypt,identity,digest
-from .schema import FIELDS,VISIBLE,GROUPS,BY_KEY,REGION_KEYS,MACAU_REGIONS,validate_checks,valid_id
+from .schema import FIELDS,VISIBLE,GROUPS,BY_KEY,REGION_KEYS,SENSITIVE,MACAU_REGIONS,validate_checks,valid_id
 from .regions import REGION_TREE,split_region
 from .services import commit_import,save_draft,submit,reopen,parse_import,export_workbook,attempt,safe_cell
 from .management.commands.seed_demo import demo_rows
@@ -80,6 +80,32 @@ class FlowTests(TestCase):
             self.assertContains(response, f'city_{expected}')
             self.assertContains(response, f'district_{expected}')
             self.assertContains(response, f'name="value_{expected}"')
+
+    def test_region_provinces_and_current_path_are_server_rendered(self):
+        self.student.school_cipher=encrypt({'E':'湖南省长沙市雨花区'})
+        self.student.save(update_fields=['school_cipher'])
+        response=self.client.get(reverse('step',args=[1]))
+        html=response.content.decode()
+        picker=html.split('id="province_E"',1)[1].split('</select>',1)[0]
+        self.assertEqual(picker.count('<option'),35)
+        self.assertIn('>湖南省</option>',picker)
+        city=html.split('id="city_E"',1)[1].split('</select>',1)[0]
+        district=html.split('id="district_E"',1)[1].split('</select>',1)[0]
+        self.assertIn('>长沙市</option>',city)
+        self.assertIn('>雨花区</option>',district)
+        self.assertNotIn('市辖区',district)
+
+    def test_compatibility_assets_use_legacy_parseable_syntax(self):
+        response=self.client.get(reverse('step',args=[1]))
+        self.assertNotContains(response,'src="/xueji/static/app.js"')
+        for name in ['compat-core.js','compat-regions.js','compat-sensitive.js','compat-options.js','compat-signature.js']:
+            self.assertContains(response,name.replace('.js','.'))
+            source=(settings.BASE_DIR/'static'/name).read_text(encoding='utf-8')
+            for forbidden in ['?.','=>','replaceChildren','new Map','async function','await ']:
+                self.assertNotIn(forbidden,source,name)
+        signature=(settings.BASE_DIR/'static/compat-signature.js').read_text(encoding='utf-8')
+        self.assertIn("'touchstart'",signature)
+        self.assertIn("'pointerdown'",signature)
 
     def test_region_tree_covers_nationwide_template_values(self):
         values = {district['value'] for province in REGION_TREE for city in province['cities'] for district in city['districts']}
@@ -155,6 +181,71 @@ class FlowTests(TestCase):
         s=save_draft(self.student.pk,0,checks,[BY_KEY['J']])
         self.assertEqual(s.draft['J']['value'],'DEMO2026001')
 
+    def test_blank_sensitive_value_is_directly_editable(self):
+        values=self.student.original;values['BT']=''
+        self.student.original_cipher=encrypt(values);self.student.save(update_fields=['original_cipher'])
+        response=self.client.get(reverse('step',args=[4]))
+        html=response.content.decode()
+        card=html.split('id="field-BT"',1)[1].split('</section>',1)[0]
+        self.assertIn('name="loaded_BT" value="1"',card)
+        self.assertIn('name="value_BT" value=""',card)
+        self.assertNotIn('data-reveal=',card)
+
+    def test_sensitive_reveal_form_fallback_preserves_original_and_opens_editor(self):
+        original=self.student.original_cipher
+        values=self.student.current();data={'revision':self.student.revision,'action':'reveal-sensitive:J'}
+        for field in GROUPS[0]:
+            key=field['key'];data['result_'+key]='confirmed'
+            if not field['readonly']:
+                data['value_'+key]=values.get(key,'')
+            if key in SENSITIVE:data['loaded_'+key]='0'
+        response=self.client.post(reverse('step',args=[1]),data)
+        self.assertEqual(response.status_code,302)
+        self.assertIn('?reveal=J#field-J',response.url)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.original_cipher,original)
+        revealed=self.client.get(response.url)
+        self.assertContains(revealed,'name="loaded_J" value="1"')
+        self.assertContains(revealed,'name="value_J" value="DEMO2026001"')
+        self.assertIn('no-store',revealed.headers['Cache-Control'])
+
+    def test_region_compatibility_flow_uses_existing_encrypted_draft(self):
+        original=self.student.original_cipher
+        values=self.student.current();data={'revision':self.student.revision,'action':'compat-region:Q'}
+        for field in GROUPS[1]:
+            key=field['key'];data['result_'+key]='confirmed'
+            if not field['readonly']:data['value_'+key]=values.get(key,'')
+        previous_q=values['Q'];data['value_Q']=''
+        response=self.client.post(reverse('step',args=[2]),data)
+        self.assertRedirects(response,reverse('region_compat',args=['Q']))
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.draft['Q']['value'],previous_q)
+        page=self.client.get(reverse('region_compat',args=['Q']),{'q':'雨花区'})
+        self.assertContains(page,'湖南省长沙市雨花区')
+        response=self.client.post(reverse('region_compat',args=['Q']),{
+            'revision':self.student.revision,'value':'湖南省长沙市雨花区',
+        })
+        self.assertEqual(response.status_code,302)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.original_cipher,original)
+        self.assertEqual(self.student.draft['Q']['value'],'湖南省长沙市雨花区')
+        self.assertEqual(self.student.draft['Q']['result'],'unconfirmed')
+        self.assertNotIn('湖南省长沙市雨花区',self.student.draft_cipher)
+
+    def test_region_compatibility_rejects_unknown_field_and_value(self):
+        self.assertEqual(self.client.get(reverse('region_compat',args=['J'])).status_code,403)
+        response=self.client.post(reverse('region_compat',args=['Q']),{
+            'revision':self.student.revision,'value':'湖南省长沙市市辖区',
+        })
+        self.assertEqual(response.status_code,200)
+        self.assertContains(response,'请选择列表中的完整行政区划')
+        self.student.refresh_from_db();self.assertNotIn('Q',self.student.draft)
+        revision=self.student.revision
+        response=self.client.post(reverse('step',args=[2]),{'revision':revision,'action':'compat-region:J'})
+        self.assertEqual(response.status_code,200)
+        self.assertContains(response,'无法识别本次操作')
+        self.student.refresh_from_db();self.assertEqual(self.student.revision,revision)
+
     def test_legacy_draft_statuses_are_compatible(self):
         self.student.draft_cipher=encrypt({'B':{'result':'incorrect','value':'旧草稿姓名'},
                                            'C':{'result':'correct','value':''},
@@ -223,6 +314,7 @@ class FlowTests(TestCase):
     def test_confirm_and_result_show_signature_ui(self):
         response=self.client.get(reverse('confirm'))
         self.assertContains(response,'signature-pad');self.assertContains(response,'signature-input');self.assertContains(response,'手写签字')
+        self.assertContains(response,'data-signature-unavailable')
         self.assertEqual(response.context['required_total'],23)
         self.complete();response=self.client.get(reverse('result'))
         self.assertContains(response,'已完成手机手写签字');self.assertContains(response,'本次电子签名');self.assertContains(response,'重新核对并修改')

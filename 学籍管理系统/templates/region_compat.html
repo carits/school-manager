@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block title %}{{ field.label|cut:'*' }}地区选择 · 中雅实验学校{% endblock %}
+{% block content %}
+<div class="page-heading"><div><span class="eyebrow">{{ student.class_name }} · {{ student.name }}</span><h1>{{ field.label|cut:'*' }}</h1><p class="muted">这是下拉选择器的兼容页面。可以逐级选择，也可以输入区县名称搜索。</p></div></div>
+{% if notice %}<div class="alert alert-danger" role="alert">{{ notice }}</div>{% endif %}
+<section class="panel compat-region-panel">
+  <p>当前内容：<strong>{{ current|default:'尚未填写' }}</strong></p>
+  <form method="get" class="compat-search-form">
+    <label for="region-search">搜索行政区划</label>
+    <div class="compat-search-row"><input class="form-control" id="region-search" name="q" value="{{ query }}" maxlength="50" placeholder="例如：雨花区"><button class="btn btn-outline-primary">搜索</button></div>
+  </form>
+  {% if query %}
+    <h2 class="compat-subheading">搜索结果</h2>
+    {% if results %}<form method="post">{% csrf_token %}<input type="hidden" name="revision" value="{{ student.revision }}"><div class="compat-result-list">{% for result in results %}<label><input type="radio" name="value" value="{{ result.value }}" required><span>{{ result.label }}</span></label>{% endfor %}</div><button class="btn btn-primary w-100 mt-3">采用所选地区</button></form>{% else %}<p class="muted">没有找到匹配地区，请换一个区县或城市名称。</p>{% endif %}
+  {% else %}
+    <h2 class="compat-subheading">逐级选择</h2>
+    <form method="get">
+      <label for="compat-province">省级地区</label>
+      <select class="form-select" id="compat-province" name="province" required><option value="">请选择省份</option>{% for item in region_tree %}<option value="{{ forloop.counter0 }}" {% if province_index == forloop.counter0 %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select>
+      <button class="btn btn-outline-primary w-100 mt-3">查看市级地区</button>
+    </form>
+    {% if province %}<form method="get" class="mt-3"><input type="hidden" name="province" value="{{ province_index }}"><label for="compat-city">市级地区</label><select class="form-select" id="compat-city" name="city" required><option value="">请选择城市</option>{% for item in province.cities %}<option value="{{ forloop.counter0 }}" {% if city_index == forloop.counter0 %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select><button class="btn btn-outline-primary w-100 mt-3">查看区县或镇街</button></form>{% endif %}
+    {% if city %}<form method="post" class="mt-3">{% csrf_token %}<input type="hidden" name="revision" value="{{ student.revision }}"><label for="compat-district">区县或镇街</label><select class="form-select" id="compat-district" name="value" required><option value="">请选择区县或镇街</option>{% for item in city.districts %}<option value="{{ item.value }}">{{ item.name }}</option>{% endfor %}</select><button class="btn btn-primary w-100 mt-3">采用所选地区</button></form>{% endif %}
+  {% endif %}
+</section>
+<a class="btn btn-outline-primary w-100 mt-3" href="{% url 'step' return_index %}#field-{{ key }}">返回本步核对</a>
+{% endblock %}

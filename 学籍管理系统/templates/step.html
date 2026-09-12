@@ -14,18 +14,20 @@
   {% if row.readonly %}
     <div class="school-value">{% if row.current %}{{ row.current }}{% else %}<span class="missing">学校尚未填写</span>{% endif %}</div>
   {% elif row.sensitive %}
-    <div class="sensitive-summary"><span data-current>{% if row.current %}{{ row.display }}{% else %}尚未填写{% endif %}</span><button class="text-button reveal" type="button" data-reveal="{% url 'reveal' row.key %}">显示并修改号码</button></div>
-    <input type="hidden" name="loaded_{{ row.key }}" value="0" data-sensitive-loaded>
-    <div class="sensitive-editor" data-sensitive-editor hidden><label for="value_{{ row.key }}">完整号码</label><input class="form-control" id="value_{{ row.key }}" name="value_{{ row.key }}" value="" type="text" maxlength="100" autocomplete="off" data-direct-value></div>
+    {% if not row.sensitive_loaded %}<div class="sensitive-summary"><span data-current>{{ row.display }}</span><button class="text-button reveal" type="submit" name="action" value="reveal-sensitive:{{ row.key }}" formnovalidate data-reveal="{% url 'reveal' row.key %}">显示完整号码并修改</button></div>{% endif %}
+    <input type="hidden" name="loaded_{{ row.key }}" value="{% if row.sensitive_loaded %}1{% else %}0{% endif %}" data-sensitive-loaded>
+    <div class="sensitive-editor" data-sensitive-editor {% if not row.sensitive_loaded %}hidden{% endif %}><label for="value_{{ row.key }}">{% if row.current %}完整号码{% else %}请填写号码{% endif %}</label><input class="form-control" id="value_{{ row.key }}" name="value_{{ row.key }}" value="{{ row.new }}" type="text" maxlength="100" autocomplete="off" data-direct-value></div>
+    <p class="reveal-status" data-reveal-status role="status" aria-live="polite" hidden></p>
   {% else %}
     <div class="direct-editor">
     {% if row.region %}
       <div class="region-picker" data-region-picker data-current="{{ row.new }}">
-        <div><label for="province_{{ row.key }}">省级地区</label><select class="form-select" id="province_{{ row.key }}" data-region-province><option value="">请选择省份</option></select></div>
-        <div><label for="city_{{ row.key }}">市级地区</label><select class="form-select" id="city_{{ row.key }}" data-region-city disabled><option value="">请先选择省份</option></select></div>
-        <div><label for="district_{{ row.key }}">区县或镇街</label><select class="form-select" id="district_{{ row.key }}" data-region-district disabled><option value="">请先选择城市</option></select></div>
+        <div><label for="province_{{ row.key }}">省级地区</label><select class="form-select" id="province_{{ row.key }}" data-region-province><option value="">请选择省份</option>{% for province in region_tree %}<option value="{{ forloop.counter0 }}" {% if row.region_initial.province_index == forloop.counter0 %}selected{% endif %}>{{ province.name }}</option>{% endfor %}</select></div>
+        <div><label for="city_{{ row.key }}">市级地区</label><select class="form-select" id="city_{{ row.key }}" data-region-city {% if row.region_initial.province_index == '' %}disabled{% endif %}><option value="">{% if row.region_initial.province_index == '' %}请先选择省份{% else %}请选择城市{% endif %}</option>{% for city in row.region_initial.cities %}<option value="{{ forloop.counter0 }}" {% if row.region_initial.city_index == forloop.counter0 %}selected{% endif %}>{{ city.name }}</option>{% endfor %}</select></div>
+        <div><label for="district_{{ row.key }}">区县或镇街</label><select class="form-select" id="district_{{ row.key }}" data-region-district {% if row.region_initial.city_index == '' %}disabled{% endif %}><option value="">{% if row.region_initial.city_index == '' %}请先选择城市{% else %}请选择区县或镇街{% endif %}</option>{% for district in row.region_initial.districts %}<option value="{{ district.value }}" {% if row.region_initial.district_value == district.value %}selected{% endif %}>{{ district.name }}</option>{% endfor %}</select></div>
         <input type="hidden" id="value_{{ row.key }}" name="value_{{ row.key }}" value="{{ row.new }}" data-region-value data-direct-value>
-        <p class="hint region-current" data-region-current hidden></p>
+        <p class="hint region-current" data-region-current {% if row.new and row.region_initial.district_value %}hidden{% endif %}>{% if row.new and not row.region_initial.district_value %}原有值：{{ row.new }}。请重新选择省、市、区县或镇街。{% endif %}</p>
+        <button class="region-compat-link" type="submit" name="action" value="compat-region:{{ row.key }}" formnovalidate>选择器打不开？使用地区搜索</button>
       </div>
     {% elif row.options %}{% if row.long_options %}
       <input class="form-control" id="value_{{ row.key }}" name="value_{{ row.key }}" value="{{ row.new }}" list="options_{{ row.key }}" autocomplete="off" role="combobox" aria-expanded="false" data-long-options data-direct-value placeholder="点击选择，或输入关键词过滤">
@@ -38,7 +40,7 @@
     </div>
   {% endif %}
   <div class="confirmation-label">核对状态</div>
-  <div class="check-options"><label class="confirmed-option"><input type="radio" name="result_{{ row.key }}" value="confirmed" {% if row.result == 'confirmed' %}checked{% endif %}> <span>✓ 已确认</span></label><label class="unconfirmed-option"><input type="radio" name="result_{{ row.key }}" value="unconfirmed" {% if row.result == 'unconfirmed' %}checked{% endif %}> <span>! 未确认</span></label></div>
+  <div class="check-options"><label class="confirmed-option"><input type="radio" name="result_{{ row.key }}" value="confirmed" {% if row.result == 'confirmed' %}checked{% endif %}><span class="status-choice">✓ 已确认</span></label><label class="unconfirmed-option"><input type="radio" name="result_{{ row.key }}" value="unconfirmed" {% if row.result == 'unconfirmed' %}checked{% endif %}><span class="status-choice">! 未确认</span></label></div>
   {% if row.readonly %}<div class="readonly-note" {% if row.result == 'confirmed' %}hidden{% endif %}><label for="note_{{ row.key }}">问题说明（选填）</label><input class="form-control" id="note_{{ row.key }}" name="note_{{ row.key }}" value="{{ row.note }}" maxlength="500" placeholder="请说明需要老师核实的内容"><p class="hint">此项由学校维护，选择未确认后会交由老师处理。</p></div>{% endif %}
 </section>
 {% endfor %}

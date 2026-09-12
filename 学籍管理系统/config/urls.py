@@ -5,6 +5,7 @@ urlpatterns=[
     path('xueji/',v.login,name='login'),path('xueji/login/',v.login),
     path('xueji/captcha/',v.captcha,name='captcha'),path('xueji/logout/',v.logout,name='logout'),
     path('xueji/check/<int:index>/',v.step,name='step'),path('xueji/reveal/<str:key>/',v.reveal,name='reveal'),
+    path('xueji/compat/region/<str:key>/',v.region_compat,name='region_compat'),
     path('xueji/confirm/',v.confirm,name='confirm'),path('xueji/result/',v.result,name='result'),
     path('xueji/health/',v.health,name='health'),path('xueji/admin/',admin.site.urls),
     path('xueji/manage/',v.dashboard,name='dashboard'),path('xueji/manage/import/',v.import_students,name='import'),

@@ -21,7 +21,7 @@ services:
       options: {max-size: "10m", max-file: "3"}
   web:
     build: .
-    image: student-check-web:6
+    image: student-check-web:7
     restart: unless-stopped
     env_file: .env
     environment:
