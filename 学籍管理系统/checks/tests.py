@@ -172,6 +172,14 @@ class FlowTests(TestCase):
         s.refresh_from_db();self.assertFalse(s.has_issue)
         self.assertNotContains(self.client.get(reverse('student_detail',args=[s.pk])),'请检查班级')
         self.assertContains(self.client.get(reverse('result')),'无待处理事项')
+    def test_reopened_class_issue_remains_visible_to_school(self):
+        checks=self.all_checks();checks['V']={'result':'unconfirmed','note':'请核实班级'}
+        s=self.complete(checks);reopen(s.pk,self.admin);s.refresh_from_db()
+        self.assertEqual(s.status,'draft');self.assertTrue(s.has_issue)
+        self.client.force_login(self.admin)
+        dashboard=self.client.get(reverse('dashboard'))
+        self.assertEqual(dashboard.context['issues'],1)
+        self.assertContains(dashboard,'待核实')
     def test_submit_idempotent_and_edit_locked(self):
         s=self.complete();submit(s.pk,s.revision,self.TEST_SIGNATURE)
         self.assertEqual(Submission.objects.filter(student=s).count(),1)

@@ -171,10 +171,10 @@ def needs_school_attention(student,payload=None):
     if not student.has_issue:return False
     school_values={**student.original,**student.school}
     if not text_value(school_values.get('V','')):return True
-    if student.status!='submitted':return False
     if payload is None:
         latest=student.submissions.order_by('-version').first()
         payload=latest.payload if latest else {}
+    if not payload:return False
     return check_status(BY_KEY['V'],payload.get('checks',{}).get('V',{}))=='unconfirmed'
 
 def safe_cell(cell,value):
