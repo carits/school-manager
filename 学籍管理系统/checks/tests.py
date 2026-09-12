@@ -50,7 +50,8 @@ class FlowTests(TestCase):
         self.assertEqual((len(FIELDS),sum(f['required'] for f in FIELDS),len(VISIBLE)),(86,25,85))
         self.assertEqual([len(g) for g in GROUPS],[15,17,27,13,13])
         self.assertEqual(sum(len(g) for g in GROUPS),len(VISIBLE))
-        self.assertEqual([f['key'] for f in VISIBLE if f['readonly']],['V','Y'])
+        self.assertEqual([f['key'] for f in VISIBLE if f['readonly']],['V'])
+        self.assertEqual(sum(f['required'] and not f['readonly'] for f in VISIBLE),23)
     def test_hidden_and_sensitive(self):
         response=self.client.get(reverse('step',args=[1]))
         self.assertEqual(response.status_code,200)
@@ -139,18 +140,38 @@ class FlowTests(TestCase):
     def test_legacy_draft_statuses_are_compatible(self):
         self.student.draft_cipher=encrypt({'B':{'result':'incorrect','value':'旧草稿姓名'},
                                            'C':{'result':'correct','value':''},
-                                           'V':{'result':'incorrect','note':'旧草稿班级问题'}})
+                                           'V':{'result':'incorrect','note':'旧草稿班级问题'},
+                                           'Y':{'result':'incorrect','note':'旧草稿学籍号问题','mode':'direct'}})
         self.student.status='draft';self.student.save()
         first=self.client.get(reverse('step',args=[1]))
         self.assertContains(first,'value="旧草稿姓名"')
         self.assertContains(first,'name="result_B" value="confirmed" checked')
         second=self.client.get(reverse('step',args=[2]))
         self.assertContains(second,'name="result_V" value="unconfirmed" checked')
+        self.assertContains(second,'name="value_Y" value="DEMO-NATIONAL-0001"')
+        self.assertContains(second,'name="result_Y" value="unconfirmed" checked')
+    def test_stale_readonly_national_id_form_preserves_value_during_deploy(self):
+        data={'revision':self.student.revision,'action':'save'}
+        for field in GROUPS[1]:
+            data['result_'+field['key']]='confirmed'
+            if field['key']!='Y' and not field['readonly']:
+                data['value_'+field['key']]=self.student.current().get(field['key'],'')
+        response=self.client.post(reverse('step',args=[2]),data)
+        self.assertEqual(response.status_code,200)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.draft['Y']['value'],'DEMO-NATIONAL-0001')
+        self.assertEqual(self.student.draft['Y']['result'],'confirmed')
     def test_readonly_injection_ignored(self):
         checks=self.all_checks();checks['V']={'result':'unconfirmed','value':'恶意班级','note':'请检查班级'}
         s=self.complete(checks)
         self.assertEqual(s.current()['V'],'2601');self.assertTrue(s.has_issue)
         self.assertNotIn('value',s.draft['V'])
+        self.assertContains(self.client.get(reverse('result')),'有项目等待老师处理')
+        self.client.force_login(self.admin)
+        self.client.post(reverse('student_detail',args=[s.pk]),{'action':'school','V':'2601'})
+        s.refresh_from_db();self.assertFalse(s.has_issue)
+        self.assertNotContains(self.client.get(reverse('student_detail',args=[s.pk])),'请检查班级')
+        self.assertContains(self.client.get(reverse('result')),'无待处理事项')
     def test_submit_idempotent_and_edit_locked(self):
         s=self.complete();submit(s.pk,s.revision,self.TEST_SIGNATURE)
         self.assertEqual(Submission.objects.filter(student=s).count(),1)
@@ -176,8 +197,9 @@ class FlowTests(TestCase):
     def test_confirm_and_result_show_signature_ui(self):
         response=self.client.get(reverse('confirm'))
         self.assertContains(response,'signature-pad');self.assertContains(response,'signature-input');self.assertContains(response,'手写签字')
+        self.assertEqual(response.context['required_total'],23)
         self.complete();response=self.client.get(reverse('result'))
-        self.assertContains(response,'已完成手机手写签字');self.assertContains(response,'本次电子签名')
+        self.assertContains(response,'已完成手机手写签字');self.assertContains(response,'本次电子签名');self.assertContains(response,'重新核对并修改')
     def test_name_and_id_changes_keep_original_login(self):
         checks=self.all_checks();checks['B']={'result':'confirmed','value':'更正姓名'};checks['J']={'result':'confirmed','value':'NEW-DEMO-ID','loaded':True}
         s=self.complete(checks)
@@ -189,10 +211,32 @@ class FlowTests(TestCase):
         self.assertEqual(s.status,'draft');self.assertEqual(s.draft,{})
         s=save_draft(s.pk,s.revision,self.all_checks(),VISIBLE);submit(s.pk,s.revision,self.TEST_SIGNATURE)
         self.assertEqual(s.submissions.count(),2)
-    def test_blank_readonly_can_be_flagged(self):
+    def test_parent_can_reopen_own_submission_without_losing_history(self):
+        s=self.complete();before=s.current();old_revision=s.revision
+        response=self.client.post(reverse('result'),{'action':'reopen'})
+        self.assertRedirects(response,reverse('step',args=[1]))
+        s.refresh_from_db()
+        self.assertEqual(s.status,'draft');self.assertEqual(s.draft,{})
+        self.assertEqual(s.revision,old_revision+1);self.assertEqual(s.submissions.count(),1)
+        self.assertEqual(s.current(),before)
+    def test_blank_national_student_id_must_be_filled_and_confirmed(self):
         self.student=Student.objects.get(source_row=4,batch=self.batch)
-        checks=self.all_checks();checks['Y']={'result':'unconfirmed','note':'暂无学籍号'}
-        self.assertTrue(self.complete(checks).has_issue)
+        self.assertFalse(self.student.has_issue)
+        checks=self.all_checks();checks['Y']={'result':'unconfirmed','value':'','mode':'direct'}
+        self.assertIn('Y',validate_checks(self.student.current(),checks)[1])
+        checks['Y']={'result':'confirmed','value':'G430100201401010001','mode':'direct'}
+        s=self.complete(checks)
+        self.assertEqual(s.current()['Y'],'G430100201401010001');self.assertFalse(s.has_issue)
+    def test_national_student_id_parent_change_overrides_school_baseline_and_exports(self):
+        school={'Y':'SCHOOL-NATIONAL-OLD','Q':'湖南省长沙市雨花区'}
+        self.student.school_cipher=encrypt(school);self.student.save(update_fields=['school_cipher'])
+        checks=self.all_checks();checks['Y']={'result':'confirmed','value':'G430100201401010002','mode':'direct'}
+        s=self.complete(checks)
+        self.assertEqual(s.school,school);self.assertEqual(s.current()['Y'],'G430100201401010002')
+        self.assertEqual(s.submissions.get().payload['changes']['Y'],{'old':'SCHOOL-NATIONAL-OLD','new':'G430100201401010002'})
+        workbook=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'final')))
+        self.assertEqual(workbook['新生1']['Y2'].value,'G430100201401010002')
+        self.assertEqual(workbook['新生1']['Y2'].data_type,'s')
     def test_export_preserves_template_nonrequired_and_strings(self):
         checks=self.all_checks();checks['AA']={'result':'confirmed','value':'=1+1'};s=self.complete(checks)
         wb=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'final')))
@@ -302,6 +346,21 @@ class FlowTests(TestCase):
         self.assertEqual(signatures.max_row,2)
         self.assertEqual(len(signatures._images),1)
 
+    def test_legacy_readonly_national_id_remains_under_school_in_history_exports(self):
+        payload={'values':{},'checks':{'V':{'result':'correct'},'Y':{'result':'incorrect','note':'旧版交由学校核实'}},'changes':{},'signature':''}
+        Submission.objects.create(student=self.student,version=1,payload_cipher=encrypt(payload))
+        self.student.status='submitted';self.student.has_issue=True;self.student.save(update_fields=['status','has_issue'])
+        changes=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'changes')))['修改明细']
+        national_row=next(row for row in changes.iter_rows(min_row=2,values_only=True) if row[4]=='全国学籍号')
+        self.assertEqual(national_row[7],'学校待处理');self.assertEqual(national_row[8],'旧版交由学校核实')
+        confirmations=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'confirmations')))['逐项确认']
+        national_row=next(row for row in confirmations.iter_rows(min_row=2,values_only=True) if row[4]=='全国学籍号')
+        self.assertEqual(national_row[6],'学校');self.assertEqual(national_row[7],'未确认');self.assertEqual(national_row[10],'否')
+        self.assertContains(self.client.get(reverse('result')),'无待处理事项')
+        self.client.force_login(self.admin)
+        dashboard=self.client.get(reverse('dashboard'))
+        self.assertEqual(dashboard.context['issues'],0)
+
     def test_staff_can_download_school_review_workbook(self):
         self.client.force_login(self.admin)
         response=self.client.get(reverse('export',args=[self.batch.pk,'review']))
@@ -342,11 +401,17 @@ class FlowTests(TestCase):
         self.batch.is_open=False;self.batch.save()
         self.assertEqual(self.client.get(reverse('step',args=[1])).status_code,403)
     def test_admin_pages_and_school_update(self):
+        self.student.school_cipher=encrypt({'Y':'SCHOOL-NATIONAL','Q':'湖南省长沙市雨花区'})
+        self.student.save(update_fields=['school_cipher'])
         self.client.force_login(self.admin)
         for url in [reverse('dashboard'),reverse('pending_classes'),reverse('student_detail',args=[self.student.pk]),'/xueji/admin/']:
             self.assertEqual(self.client.get(url).status_code,200)
-        r=self.client.post(reverse('student_detail',args=[self.student.pk]),{'action':'school','V':'2609','Y':'UPDATED-NATIONAL'})
-        self.assertEqual(r.status_code,302);self.student.refresh_from_db();self.assertEqual(self.student.current()['V'],'2609')
+        detail=self.client.get(reverse('student_detail',args=[self.student.pk]))
+        self.assertNotContains(detail,'name="Y"')
+        r=self.client.post(reverse('student_detail',args=[self.student.pk]),{'action':'school','V':'2609','Y':'FORGED-NATIONAL'})
+        self.assertEqual(r.status_code,302);self.student.refresh_from_db()
+        self.assertEqual(self.student.current()['V'],'2609')
+        self.assertEqual(self.student.school,{'Y':'SCHOOL-NATIONAL','Q':'湖南省长沙市雨花区','V':'2609'})
     def test_qr_and_template(self):
         self.client.force_login(self.admin)
         self.assertEqual(self.client.get(reverse('qr')).headers['Content-Type'],'image/png')

@@ -48,9 +48,14 @@ class Student(models.Model):
     def current(self):
         values = self.original
         latest = self.submissions.order_by('-version').first()
+        submitted = latest.payload['values'] if latest else {}
         if latest:
-            values.update(latest.payload['values'])
+            values.update(submitted)
         values.update(self.school)
+        # Y changed from school-maintained to parent-editable. Historical submissions do not
+        # contain Y, while new submissions must take precedence over its old school baseline.
+        if 'Y' in submitted:
+            values['Y'] = submitted['Y']
         return values
 
 class Submission(models.Model):

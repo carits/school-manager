@@ -8,7 +8,7 @@ import openpyxl
 from PIL import Image, UnidentifiedImageError
 from openpyxl.drawing.image import Image as ExcelImage
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Prefetch
 from django.utils import timezone
 from .crypto import encrypt, digest, identity
 from .models import Batch, Student, Submission, Audit, Throttle
@@ -110,7 +110,7 @@ def commit_import(rows, fingerprint, title, user, demo=False):
     for row in rows:
         v=row['values']
         students.append(Student(batch=batch, source_row=row['row'], serial_hash=digest(v['A']), identity_hash=identity(v['B'],v['J']),
-                       name=v['B'], class_name=v['V'], original_cipher=encrypt(v), has_issue=not(v.get('V') and v.get('Y'))))
+                       name=v['B'], class_name=v['V'], original_cipher=encrypt(v), has_issue=not bool(v.get('V'))))
     Student.objects.bulk_create(students)
     audit(user,'导入批次',batch.pk,{'count':len(students),'demo':demo})
     return batch
@@ -126,7 +126,7 @@ def save_draft(student_id, revision, checks, fields):
         old=draft.get(f['key'],{})
         draft[f['key']]={'result':check_status(f,item), 'note':str(item.get('note',''))[:500], 'mode':'direct'}
         if not f['readonly']:
-            if f['key'] in SENSITIVE and not item.get('loaded'):
+            if 'value' not in item or (f['key'] in SENSITIVE and not item.get('loaded')):
                 value=check_value(base,f,old)
             else:
                 value=text_value(item.get('value',''))[:500]
@@ -152,7 +152,10 @@ def submit(student_id, revision, signature=None):
     changes={k:{'old':base.get(k,''),'new':v} for k,v in editable.items() if v!=base.get(k,'')}
     Submission.objects.create(student=student,version=versions+1,payload_cipher=encrypt({'values':editable,'checks':checks,'changes':changes,'signature':signature}))
     student.status='submitted'; student.submitted_at=timezone.now(); student.change_count=len(changes)
-    student.has_issue=any(check_status(BY_KEY[k],checks.get(k,{}))=='unconfirmed' or not values.get(k) for k in ['V','Y'])
+    student.has_issue=any(
+        check_status(field,checks.get(field['key'],{}))=='unconfirmed' or not values.get(field['key'])
+        for field in VISIBLE if field['readonly']
+    )
     student.revision+=1; student.save()
     return student
 
@@ -163,32 +166,51 @@ def reopen(student_id,user):
     s.status='draft'; s.draft_cipher=encrypt({}); s.revision+=1; s.save()
     audit(user,'重新开放核对',s.pk)
 
+def needs_school_attention(student,payload=None):
+    """Return the current class issue without trusting legacy Y-based flags."""
+    if not student.has_issue:return False
+    school_values={**student.original,**student.school}
+    if not text_value(school_values.get('V','')):return True
+    if student.status!='submitted':return False
+    if payload is None:
+        latest=student.submissions.order_by('-version').first()
+        payload=latest.payload if latest else {}
+    return check_status(BY_KEY['V'],payload.get('checks',{}).get('V',{}))=='unconfirmed'
+
 def safe_cell(cell,value):
     cell.value=value
     if isinstance(value,str): cell.data_type='s'; cell.number_format='@'
 
 def export_workbook(batch,kind,class_name=None):
-    students=Student.objects.filter(batch=batch).prefetch_related('submissions')
+    students=Student.objects.filter(batch=batch)
     if class_name is not None: students=students.filter(class_name=class_name)
     if kind=='pending': students=students.exclude(status='submitted')
+    if kind in {'changes','confirmations'}:
+        students=(students.filter(submissions__isnull=False).distinct()
+                  .prefetch_related(Prefetch('submissions',queryset=Submission.objects.order_by('version'),to_attr='export_submissions')))
+    else:
+        students=students.prefetch_related('submissions')
     if kind in {'final','review','pending'}:
         wb=openpyxl.load_workbook(__import__('django').conf.settings.BASE_DIR/'assets/template.xlsx')
         ws=wb['新生1']
         for row,s in enumerate(students,2):
-            values=s.current() if s.status=='submitted' else {**s.original,**s.school}
+            # Draft values are never exported, but a reopened student's last submitted values remain final.
+            values=s.current()
             for col,f in enumerate(FIELDS,1): safe_cell(ws.cell(row,col),values.get(f['key'],''))
         ws.freeze_panes='C2'; ws.auto_filter.ref=f'A1:CH{max(1,len(students)+1)}'
     elif kind=='changes':
         wb=openpyxl.Workbook();ws=wb.active;ws.title='修改明细'
         ws.append(['班级','姓名','提交版本','提交时间','字段','原始值','提交值','核对结果','说明'])
         for s in students:
-            for sub in s.submissions.order_by('version'):
+            original=s.original;school=s.school
+            for sub in s.export_submissions:
                 p=sub.payload
                 for f in VISIBLE:
                     k=f['key']; check=p['checks'].get(k,{})
-                    if k not in p['changes'] and not (f['readonly'] and check_status(f,check)=='unconfirmed'): continue
-                    change=p['changes'].get(k,{'old':s.original.get(k,''),'new':s.school.get(k,s.original.get(k,''))})
-                    row=[s.class_name,s.name,str(sub.version),timezone.localtime(sub.created_at).strftime('%Y-%m-%d %H:%M:%S'),f['label'].replace('*',''),change['old'],change['new'],'学校待处理' if f['readonly'] else '已更正',check.get('note','')]
+                    historical_readonly=f['readonly'] or (k=='Y' and k not in p.get('values',{}))
+                    if k not in p['changes'] and not (historical_readonly and check_status(f,check)=='unconfirmed'): continue
+                    change=p['changes'].get(k,{'old':original.get(k,''),'new':school.get(k,original.get(k,''))})
+                    row=[s.class_name,s.name,str(sub.version),timezone.localtime(sub.created_at).strftime('%Y-%m-%d %H:%M:%S'),f['label'].replace('*',''),change['old'],change['new'],'学校待处理' if historical_readonly else '已更正',check.get('note','')]
                     n=ws.max_row+1
                     for col,v in enumerate(row,1): safe_cell(ws.cell(n,col),v)
         ws.freeze_panes='A2'
@@ -198,21 +220,24 @@ def export_workbook(batch,kind,class_name=None):
         signatures=wb.create_sheet('家长签名')
         signatures.append(['班级','姓名','提交版本','提交时间','手写签名'])
         image_streams=[]
+        confirmation_row=2
         signature_row=2
         for s in students:
             original={**s.original,**s.school}
-            for sub in s.submissions.order_by('version'):
+            for sub in s.export_submissions:
                 payload=sub.payload;checks=payload.get('checks',{});submitted=payload.get('values',{})
                 submitted_at=timezone.localtime(sub.created_at).strftime('%Y-%m-%d %H:%M:%S')
                 for f in VISIBLE:
                     key=f['key'];check=checks.get(key,{})
+                    historical_readonly=f['readonly'] or (key=='Y' and key not in submitted)
                     old=text_value(original.get(key,''))
-                    new=old if f['readonly'] else text_value(submitted.get(key,old))
+                    new=old if historical_readonly else text_value(submitted.get(key,old))
                     row=[s.class_name,s.name,str(sub.version),submitted_at,f['label'].replace('*',''),
-                         '是' if f['required'] else '否','学校' if f['readonly'] else '家长',
+                         '是' if f['required'] else '否','学校' if historical_readonly else '家长',
                          '已确认' if check_status(f,check)=='confirmed' else '未确认',old,new,
-                         '是' if not f['readonly'] and new!=old else '否',str(check.get('note',''))]
-                    for col,value in enumerate(row,1): safe_cell(ws.cell(ws.max_row+1 if col==1 else ws.max_row,col),value)
+                         '是' if not historical_readonly and new!=old else '否',str(check.get('note',''))]
+                    for col,value in enumerate(row,1): safe_cell(ws.cell(confirmation_row,col),value)
+                    confirmation_row+=1
                 signature=payload.get('signature','')
                 signatures.append([s.class_name,s.name,str(sub.version),submitted_at,''])
                 if signature and ',' in signature:

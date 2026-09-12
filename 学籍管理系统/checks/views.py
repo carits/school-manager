@@ -9,16 +9,16 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q, F
+from django.db.models import Count, Q, F, Prefetch
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_POST, require_GET
 from .crypto import encrypt, decrypt, identity, digest, normalize
-from .models import Batch, Student, ImportPreview, Throttle
+from .models import Batch, Student, Submission, ImportPreview, Throttle
 from .schema import GROUPS, GROUP_NAMES, VISIBLE, SENSITIVE, BY_KEY, REGION_KEYS, validate_checks, check_status, check_value, text_value
 from .regions import REGION_TREE
-from .services import attempt, save_draft, submit, parse_import, commit_import, audit, export_workbook, reopen
+from .services import attempt, save_draft, submit, parse_import, commit_import, audit, export_workbook, reopen, needs_school_attention
 
 def common_context(request):
     return {'demo_mode':settings.DEMO_MODE, 'group_names':GROUP_NAMES}
@@ -93,12 +93,18 @@ def step(request,index):
     if request.student.status=='submitted':return redirect('result')
     fields=GROUPS[index-1]; errors={}; notice=''
     if request.method=='POST':
-        checks={f['key']:{'result':request.POST.get('result_'+f['key'],''),
-                          'value':request.POST.get('value_'+f['key'],''),
-                          'note':request.POST.get('note_'+f['key'],''),
-                          'loaded':request.POST.get('loaded_'+f['key'])=='1'} for f in fields}
+        checks={}
+        for f in fields:
+            key=f['key']; value_key='value_'+key
+            item={'result':request.POST.get('result_'+key,''),
+                  'note':request.POST.get('note_'+key,''),
+                  'loaded':request.POST.get('loaded_'+key)=='1'}
+            # A form opened before Y became editable has no value_Y control. Keep the
+            # current value when that stale page is submitted during the rolling release.
+            if value_key in request.POST:item['value']=request.POST.get(value_key,'')
+            checks[key]=item
         for k in SENSITIVE:
-            if k in checks: checks[k]['value']=checks[k]['value'].upper()
+            if k in checks and 'value' in checks[k]:checks[k]['value']=checks[k]['value'].upper()
         try:
             request.student=save_draft(request.student.pk,int(request.POST.get('revision','-1')),checks,fields)
             if request.POST.get('action')=='save': messages.success(request,'本步草稿已保存，可稍后继续。')
@@ -152,9 +158,14 @@ def confirm(request):
 @parent_required
 def result(request):
     if request.student.status!='submitted':return redirect('step',index=1)
+    if request.method=='POST' and request.POST.get('action')=='reopen':
+        reopen(request.student.pk,'家长本人')
+        messages.success(request,'已进入新一轮核对，请重新检查并确认全部必填信息。')
+        return redirect('step',index=1)
     latest=request.student.submissions.order_by('-version').first()
-    signature=latest.payload.get('signature','') if latest else ''
-    return render(request,'result.html',{'student':request.student,'signature':signature,'signed':bool(signature)})
+    payload=latest.payload if latest else {};signature=payload.get('signature','')
+    school_issue=needs_school_attention(request.student,payload)
+    return render(request,'result.html',{'student':request.student,'signature':signature,'signed':bool(signature),'school_issue':school_issue})
 
 @require_GET
 def health(request):
@@ -167,14 +178,23 @@ def dashboard(request):
     batch_id=request.GET.get('batch');batch=get_object_or_404(Batch,pk=batch_id) if batch_id else current_batch()
     query=Student.objects.filter(batch=batch) if batch else Student.objects.none()
     stats={x['status']:x['count'] for x in query.values('status').annotate(count=Count('pk'))}
-    total=query.count();issues=query.filter(has_issue=True).count()
+    total=query.count()
+    issue_candidates=query.filter(has_issue=True).prefetch_related(
+        Prefetch('submissions',queryset=Submission.objects.order_by('version'),to_attr='issue_submissions')
+    )
+    issue_ids=[]
+    for student in issue_candidates:
+        latest=student.issue_submissions[-1].payload if student.issue_submissions else {}
+        if needs_school_attention(student,latest):issue_ids.append(student.pk)
+    issue_id_set=set(issue_ids);issues=len(issue_ids)
     classes=list(query.values_list('class_name',flat=True).distinct())
     if request.GET.get('q'):query=query.filter(name__icontains=request.GET['q'][:100])
     if request.GET.get('class'):query=query.filter(class_name=request.GET['class'])
     if request.GET.get('status'):query=query.filter(status=request.GET['status'])
-    if request.GET.get('issue'):query=query.filter(has_issue=True)
+    if request.GET.get('issue'):query=query.filter(pk__in=issue_ids)
     from django.core.paginator import Paginator
     page=Paginator(query,50).get_page(request.GET.get('page'))
+    for student in page.object_list:student.display_issue=student.pk in issue_id_set
     params=request.GET.copy();params.pop('page',None)
     return render(request,'dashboard.html',{'batch':batch,'batches':Batch.objects.order_by('-pk'),'students':page,
                  'stats':stats,'total':total,'issues':issues,'classes':classes,'public_url':settings.PUBLIC_URL,'querystring':params.urlencode()})
@@ -261,17 +281,19 @@ def student_detail(request,pk):
         elif request.POST.get('action')=='school':
             with transaction.atomic():
                 student=Student.objects.select_for_update().get(pk=pk)
-                before=student.school;values={k:request.POST.get(k,'').strip()[:100] for k in ['V','Y']}
-                if not all(values.values()):messages.error(request,'班级和全国学籍号均需填写。')
+                before=student.school;class_name=request.POST.get('V','').strip()[:100]
+                if not class_name:messages.error(request,'班级必须填写。')
                 else:
-                    student.school_cipher=encrypt(values);student.class_name=values['V'];student.has_issue=False;student.revision+=1;student.save()
-                    audit(request.user,'维护学校字段',student.pk,{'before':before,'after':values})
-                    messages.success(request,'学校字段已更新，待处理标记已解除。')
+                    school=dict(before);school['V']=class_name
+                    student.school_cipher=encrypt(school);student.class_name=class_name;student.has_issue=False;student.revision+=1
+                    student.save(update_fields=['school_cipher','class_name','has_issue','revision'])
+                    audit(request.user,'维护班级',student.pk,{'before':before.get('V',''),'after':class_name})
+                    messages.success(request,'班级已更新，待处理标记已解除。')
         return redirect('student_detail',pk=pk)
     rows=field_rows(student,VISIBLE,student.draft)
     history=[{'version':s.version,'created_at':s.created_at,'changes':[{'label':BY_KEY[k]['label'].replace('*',''),**v} for k,v in s.payload['changes'].items()]} for s in student.submissions.order_by('-version')]
     latest=student.submissions.order_by('-version').first()
-    issues=[{'label':BY_KEY[k]['label'].replace('*',''),'note':v.get('note','')} for k,v in (latest.payload['checks'] if latest else {}).items() if k in {'V','Y'} and check_status(BY_KEY[k],v)=='unconfirmed']
+    issues=[{'label':BY_KEY[k]['label'].replace('*',''),'note':v.get('note','')} for k,v in (latest.payload['checks'] if latest else {}).items() if student.has_issue and k=='V' and check_status(BY_KEY[k],v)=='unconfirmed']
     audit(request.user,'查看学生详情',student.pk)
     return render(request,'student_detail.html',{'student':student,'rows':rows,'history':history,'school_values':student.current(),'issues':issues})
 

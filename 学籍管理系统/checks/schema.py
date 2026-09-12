@@ -43,7 +43,7 @@ def check_status(field, item):
     if result == 'correct':
         return 'confirmed'
     if result == 'incorrect':
-        return 'unconfirmed' if field['readonly'] else 'confirmed'
+        return 'unconfirmed' if field['readonly'] or 'value' not in item else 'confirmed'
     return 'unconfirmed'
 
 def check_value(base, field, item):
@@ -51,7 +51,7 @@ def check_value(base, field, item):
     key = field['key']
     if field['readonly']:
         return text_value(base.get(key, ''))
-    if item.get('mode') == 'direct' or item.get('result') == 'incorrect':
+    if 'value' in item and (item.get('mode') == 'direct' or item.get('result') == 'incorrect'):
         return text_value(item.get('value', ''))
     return text_value(base.get(key, ''))
 
