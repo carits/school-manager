@@ -45,6 +45,30 @@
   white-space: nowrap;
 }
 
+.field-guidance {
+  margin: 16px 0;
+  padding: 16px;
+  background: #f2f7fd;
+  border: 1px solid #c9dcee;
+  border-left: 5px solid #1763bc;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.field-guidance-title { display: block; margin-bottom: 5px; font-size: 16px; }
+.field-guidance p { margin: 0; }
+.field-guidance dl { margin: 13px 0; }
+.field-guidance dl > div {
+  display: grid;
+  grid-template-columns: 165px 1fr;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid #d8e5f1;
+}
+.field-guidance dt { color: #174f87; font-weight: 700; }
+.field-guidance dd { margin: 0; }
+.field-guidance .field-guidance-note { color: #704d0a; font-weight: 650; }
+
 .check-options label {
   display: flex;
   align-items: center;
@@ -159,6 +183,8 @@
   .validation-summary span { font-size: 13px; }
   .field-card { scroll-margin-top: 120px; }
   .field-error-message { align-items: flex-start; }
+  .field-guidance { padding: 14px; }
+  .field-guidance dl > div { grid-template-columns: 1fr; gap: 1px; }
   .sensitive-summary { align-items: flex-start; flex-direction: column; }
   .text-button.reveal { width: 100%; min-height: 44px; }
   .parent-action-bar { margin-right: -8px; margin-left: -8px; }

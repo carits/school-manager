@@ -10,6 +10,7 @@
 <section id="field-{{ row.key }}" class="panel field-card {% if row.error %}field-error{% endif %}" data-field="{{ row.key }}" {% if row.first_error %}data-first-error tabindex="-1"{% endif %}>
   <div class="field-heading"><h2>{{ row.label }}{% if row.required %} <span aria-label="必填">*</span>{% endif %}</h2>{% if row.readonly %}<span class="badge-soft">学校维护</span>{% else %}<span class="required-label">{% if row.required %}必填并确认{% else %}可不填{% endif %}</span>{% endif %}</div>
   {% if row.error %}<div class="field-error-message" role="alert"><strong>请处理此项</strong><span>{{ row.error }}</span></div>{% endif %}
+  {% if row.key == 'T' %}<aside class="field-guidance" id="field-guidance-T" aria-label="户籍类别填写说明"><strong class="field-guidance-title">户籍类别填写说明</strong><p>本项按学生在长沙的户籍或居住身份来源分类，不是“农业户口 / 非农业户口”的户口性质。</p><dl><div><dt>常驻</dt><dd>普通居民户籍。学生使用大陆居民身份证，且户口所在地在长沙市时，通常选择此项。</dd></div><div><dt>蓝印</dt><dd>历史上的蓝印户口人员使用，现在较少见。</dd></div><div><dt>人才引进居住证</dt><dd>因人才引进政策取得相关居住资格的学生使用。</dd></div><div><dt>务工人员居住证</dt><dd>外地户籍，父母在长沙务工，依靠居住证等在长沙就读的学生使用。</dd></div><div><dt>在长就读的港澳台侨学生</dt><dd>港澳台或华侨身份、在长沙就读的学生使用。</dd></div><div><dt>在长就读的外国籍学生</dt><dd>外国国籍、在长沙就读的学生使用。</dd></div><div><dt>其他</dt><dd>确实不属于以上任何类别时使用。</dd></div></dl><p class="field-guidance-note">请按学生实际情况选择；不确定时请先核实，不要统一选择“其他”。</p></aside>{% endif %}
   {% if row.readonly %}
     <div class="school-value">{% if row.current %}{{ row.current }}{% else %}<span class="missing">学校尚未填写</span>{% endif %}</div>
   {% elif row.sensitive %}
@@ -30,7 +31,7 @@
       <input class="form-control" id="value_{{ row.key }}" name="value_{{ row.key }}" value="{{ row.new }}" list="options_{{ row.key }}" autocomplete="off" role="combobox" aria-expanded="false" data-long-options data-direct-value placeholder="点击选择，或输入关键词过滤">
       <datalist id="options_{{ row.key }}">{% for option in row.options %}<option value="{{ option }}"></option>{% endfor %}</datalist>
     {% else %}
-      <select class="form-select" id="value_{{ row.key }}" name="value_{{ row.key }}" data-direct-value><option value="">请选择</option>{% for option in row.options %}<option {% if row.new == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>
+      <select class="form-select" id="value_{{ row.key }}" name="value_{{ row.key }}" {% if row.key == 'T' %}aria-describedby="field-guidance-T"{% endif %} data-direct-value><option value="">请选择</option>{% for option in row.options %}<option {% if row.new == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>
     {% endif %}{% else %}
       <input class="form-control" id="value_{{ row.key }}" name="value_{{ row.key }}" value="{{ row.new }}" {% if row.key == 'D' %}type="date"{% elif row.key == 'BQ' %}type="tel"{% else %}type="text"{% endif %} maxlength="500" autocomplete="off" data-direct-value>
     {% endif %}

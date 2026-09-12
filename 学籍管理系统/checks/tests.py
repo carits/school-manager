@@ -106,6 +106,24 @@ class FlowTests(TestCase):
         self.assertContains(response,'value="unconfirmed"')
         self.assertNotContains(response,'信息有误')
 
+    def test_residency_category_guidance_is_clear_and_read_only(self):
+        self.assertFalse(BY_KEY['T']['required'])
+        self.assertFalse(BY_KEY['T']['readonly'])
+        self.assertEqual(BY_KEY['T']['options'],[
+            '常驻','蓝印','人才引进居住证','务工人员居住证',
+            '在长就读的港澳台侨学生','在长就读的外国籍学生','其他',
+        ])
+        before=(self.student.original_cipher,self.student.school_cipher,self.student.draft_cipher,self.student.revision)
+        response=self.client.get(reverse('step',args=[2]))
+        self.assertContains(response,'户籍类别填写说明')
+        self.assertContains(response,'aria-describedby="field-guidance-T"')
+        self.assertContains(response,'不是“农业户口 / 非农业户口”的户口性质')
+        self.assertContains(response,'户口所在地在长沙市时，通常选择此项')
+        self.assertContains(response,'不要统一选择“其他”')
+        self.student.refresh_from_db()
+        self.assertEqual((self.student.original_cipher,self.student.school_cipher,self.student.draft_cipher,self.student.revision),before)
+        self.assertNotContains(self.client.get(reverse('step',args=[1])),'户籍类别填写说明')
+
     def test_next_locates_first_validation_error(self):
         values=self.student.current();data={'revision':self.student.revision,'action':'next'}
         for field in GROUPS[0]:
