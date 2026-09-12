@@ -1,0 +1,15 @@
+.venv
+.git
+local-secrets.json
+.env
+credentials.txt
+deployment-admin.txt
+docker-compose-upload
+private
+*.sqlite3
+__pycache__
+staticfiles
+artifacts
+backups
+bin
+*.tar.gz

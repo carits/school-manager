@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="page-heading"><div><span class="eyebrow">{{ student.class_name }} · {{ student.name }}</span><h1>{{ title }}</h1><p class="muted">已有内容和空白内容都可以直接修改。带 * 的项目必须填写并确认；非 * 项目未修改时可以暂不确认。</p></div><span class="step-count">{{ index }} / {{ group_names|length|add:1 }}</span></div>
+<nav class="steps" aria-label="核对步骤">{% for name in group_names %}<a class="{% if forloop.counter == index %}active{% endif %}" href="{% url 'step' forloop.counter %}"><span>{{ forloop.counter }}</span>{{ name }}</a>{% endfor %}<a href="{% url 'confirm' %}"><span>{{ group_names|length|add:1 }}</span>最终确认</a></nav>
+{% if notice %}<div class="alert alert-danger" role="alert">{{ notice }}</div>{% endif %}
+{% if error_count %}<div class="validation-summary" role="alert" aria-live="assertive" data-validation-summary><strong>还有 {{ error_count }} 项需要处理</strong><span>已为您定位到第一项，请按红色提示填写或确认。</span></div>{% endif %}
+<form method="post" id="check-form">{% csrf_token %}<input type="hidden" name="revision" value="{{ student.revision }}">
+<div class="field-list">
+{% for row in rows %}
+<section id="field-{{ row.key }}" class="panel field-card {% if row.error %}field-error{% endif %}" data-field="{{ row.key }}" {% if row.first_error %}data-first-error tabindex="-1"{% endif %}>
+  <div class="field-heading"><h2>{{ row.label }}{% if row.required %} <span aria-label="必填">*</span>{% endif %}</h2>{% if row.readonly %}<span class="badge-soft">学校维护</span>{% else %}<span class="required-label">{% if row.required %}必填并确认{% else %}可不填{% endif %}</span>{% endif %}</div>
+  {% if row.error %}<div class="field-error-message" role="alert"><strong>请处理此项</strong><span>{{ row.error }}</span></div>{% endif %}
+  {% if row.readonly %}
+    <div class="school-value">{% if row.current %}{{ row.current }}{% else %}<span class="missing">学校尚未填写</span>{% endif %}</div>
+  {% elif row.sensitive %}
+    <div class="sensitive-summary"><span data-current>{% if row.current %}{{ row.display }}{% else %}尚未填写{% endif %}</span><button class="text-button reveal" type="button" data-reveal="{% url 'reveal' row.key %}">显示并修改号码</button></div>
+    <input type="hidden" name="loaded_{{ row.key }}" value="0" data-sensitive-loaded>
+    <div class="sensitive-editor" data-sensitive-editor hidden><label for="value_{{ row.key }}">完整号码</label><input class="form-control" id="value_{{ row.key }}" name="value_{{ row.key }}" value="" type="text" maxlength="100" autocomplete="off" data-direct-value></div>
+  {% else %}
+    <div class="direct-editor">
+    {% if row.region %}
+      <div class="region-picker" data-region-picker data-current="{{ row.new }}">
+        <div><label for="province_{{ row.key }}">省级地区</label><select class="form-select" id="province_{{ row.key }}" data-region-province><option value="">请选择省份</option></select></div>
+        <div><label for="city_{{ row.key }}">市级地区</label><select class="form-select" id="city_{{ row.key }}" data-region-city disabled><option value="">请先选择省份</option></select></div>
+        <div><label for="district_{{ row.key }}">区县或镇街</label><select class="form-select" id="district_{{ row.key }}" data-region-district disabled><option value="">请先选择城市</option></select></div>
+        <input type="hidden" id="value_{{ row.key }}" name="value_{{ row.key }}" value="{{ row.new }}" data-region-value data-direct-value>
+        <p class="hint region-current" data-region-current hidden></p>
+      </div>
+    {% elif row.options %}{% if row.long_options %}
+      <input class="form-control" id="value_{{ row.key }}" name="value_{{ row.key }}" value="{{ row.new }}" list="options_{{ row.key }}" autocomplete="off" role="combobox" aria-expanded="false" data-long-options data-direct-value placeholder="点击选择，或输入关键词过滤">
+      <datalist id="options_{{ row.key }}">{% for option in row.options %}<option value="{{ option }}"></option>{% endfor %}</datalist>
+    {% else %}
+      <select class="form-select" id="value_{{ row.key }}" name="value_{{ row.key }}" data-direct-value><option value="">请选择</option>{% for option in row.options %}<option {% if row.new == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>
+    {% endif %}{% else %}
+      <input class="form-control" id="value_{{ row.key }}" name="value_{{ row.key }}" value="{{ row.new }}" {% if row.key == 'D' %}type="date"{% elif row.key == 'BQ' %}type="tel"{% else %}type="text"{% endif %} maxlength="500" autocomplete="off" data-direct-value>
+    {% endif %}
+    </div>
+  {% endif %}
+  <div class="confirmation-label">核对状态</div>
+  <div class="check-options"><label class="confirmed-option"><input type="radio" name="result_{{ row.key }}" value="confirmed" {% if row.result == 'confirmed' %}checked{% endif %}> <span>✓ 已确认</span></label><label class="unconfirmed-option"><input type="radio" name="result_{{ row.key }}" value="unconfirmed" {% if row.result == 'unconfirmed' %}checked{% endif %}> <span>! 未确认</span></label></div>
+  {% if row.readonly %}<div class="readonly-note" {% if row.result == 'confirmed' %}hidden{% endif %}><label for="note_{{ row.key }}">问题说明（选填）</label><input class="form-control" id="note_{{ row.key }}" name="note_{{ row.key }}" value="{{ row.note }}" maxlength="500" placeholder="请说明需要老师核实的内容"><p class="hint">此项由学校维护，选择未确认后会交由老师处理。</p></div>{% endif %}
+</section>
+{% endfor %}
+</div>
+<div class="form-actions parent-action-bar"><button class="btn btn-outline-primary draft-button" name="action" value="save" formnovalidate>暂存本页</button><button class="btn btn-primary next-button" name="action" value="next">保存并进入下一步 <span aria-hidden="true">→</span></button></div><p class="hint text-center mt-3">系统会保存本页内容。30 分钟未操作后需重新验证身份。</p>
+</form>
+{% if has_regions %}{{ region_tree|json_script:"region-data" }}{% endif %}
+{% endblock %}

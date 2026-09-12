@@ -1,0 +1,22 @@
+.region-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.region-picker label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.region-picker .region-current {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 760px) {
+  .region-picker {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}

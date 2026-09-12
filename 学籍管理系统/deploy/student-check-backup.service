@@ -1,0 +1,7 @@
+[Unit]
+Description=Student check daily database and key backup
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/student-check/deploy/backup.sh
+User=root

@@ -1,0 +1,15 @@
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.env
+local-secrets.json
+*.sqlite3
+staticfiles/
+artifacts/
+outputs/
+backups/
+credentials.txt
+deployment-admin.txt
+private/
+wheelhouse/*.whl

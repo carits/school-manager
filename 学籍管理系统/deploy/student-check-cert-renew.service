@@ -1,0 +1,9 @@
+[Unit]
+Description=Renew short-lived IP certificate for student check
+After=docker.service nginx.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/lib/letsencrypt:/var/lib/letsencrypt -v /var/log/letsencrypt:/var/log/letsencrypt -v /var/www/letsencrypt:/var/www/letsencrypt certbot/certbot:v5.4.0 renew --non-interactive --quiet
+ExecStartPost=/usr/sbin/nginx -t
+ExecStartPost=/bin/systemctl reload nginx
+User=root

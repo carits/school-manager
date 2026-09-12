@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily IP certificate renewal check
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=20m
+Persistent=true
+[Install]
+WantedBy=timers.target
