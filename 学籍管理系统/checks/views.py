@@ -310,14 +310,17 @@ def pending_classes(request,group='regular'):
         class_rows.append(row)
     selected_key=request.GET.get('class')
     selected=next((row for row in class_rows if row['key']==selected_key),None) if group=='regular' else None
-    status_filter=request.GET.get('status','pending')
+    status_filter=request.GET.get('status','all' if group=='benbu' else 'pending')
     if status_filter not in {'pending','submitted','all'}:status_filter='pending'
     students=query.order_by('class_name','source_row') if group=='benbu' else query.none()
+    if group=='benbu':
+        if status_filter=='pending':students=students.exclude(status='submitted')
+        elif status_filter=='submitted':students=students.filter(status='submitted')
     if selected:
         students=query.filter(class_name=selected['class_name']).order_by('source_row')
         if status_filter=='pending':students=students.exclude(status='submitted')
         elif status_filter=='submitted':students=students.filter(status='submitted')
-    selected_count=students.count() if selected else 0
+    selected_count=students.count() if selected or group=='benbu' else 0
     filter_labels={'pending':'未核对','submitted':'已核对','all':'全部'}
     return render(request,'pending_classes.html',{
         'batch':batch,'class_rows':class_rows,

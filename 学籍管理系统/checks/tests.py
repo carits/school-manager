@@ -436,6 +436,14 @@ class FlowTests(TestCase):
         self.assertContains(head_page,'本部学生总表')
         self.assertNotContains(head_page,'各班完成情况')
         self.assertNotContains(head_page,'查看本班学生')
+        self.assertContains(head_page,'未核对（1）')
+        self.assertContains(head_page,'已核对（0）')
+        self.assertEqual(head_page.context['status_filter'],'all')
+        self.assertEqual(head_page.context['selected_count'],1)
+        pending=Client().get(reverse('pending_head_campus'),{'status':'pending'})
+        self.assertEqual(list(pending.context['students'].values_list('pk',flat=True)),[head.pk])
+        submitted=Client().get(reverse('pending_head_campus'),{'status':'submitted'})
+        self.assertFalse(submitted.context['students'].exists())
 
     def test_assign_progress_group_command_is_atomic(self):
         students=list(Student.objects.filter(batch=self.batch).order_by('source_row')[:2])
