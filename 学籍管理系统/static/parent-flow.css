@@ -166,10 +166,14 @@
 .progress-summary { display: flex; gap: 12px; margin: -10px 0 20px; }
 .progress-summary span { flex: 1; padding: 12px 18px; color: #60758a; background: #fff; border: 1px solid #dce5ef; border-radius: 10px; }
 .progress-summary strong { display: block; color: #142f47; font-size: 25px; }
-.status-filter { display: flex; gap: 10px; margin: 0 0 20px; }
+.status-filter { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 20px; }
 .filter-pill { flex: 1; padding: 10px 14px; color: #496784; text-align: center; background: #edf3fa; border: 2px solid transparent; border-radius: 8px; font-weight: 650; }
 .filter-pill:hover { text-decoration: none; }
 .filter-pill.active { color: #fff; background: #1763bc; border-color: #1763bc; box-shadow: 0 4px 12px rgb(23 99 188 / 20%); }
+.issue-summary strong, .issue-count { color: #b72e34; }
+.issue-pill { color: #9a2730; background: #fff0f1; }
+.issue-pill.active { color: #fff; background: #b72e34; border-color: #b72e34; box-shadow: 0 4px 12px rgb(183 46 52 / 20%); }
+.review-issue { display: block; color: #9a2730; font-weight: 650; }
 
 @media (max-width: 760px) {
   .validation-summary {
@@ -207,5 +211,5 @@
   .progress-summary { margin-top: -4px; }
   .progress-summary span { padding: 10px 13px; }
   .status-filter { gap: 6px; }
-  .filter-pill { padding: 9px 5px; font-size: 13px; }
+  .filter-pill { flex: 1 1 calc(50% - 6px); min-width: 0; padding: 9px 5px; font-size: 13px; }
 }

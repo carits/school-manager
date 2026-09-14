@@ -175,7 +175,37 @@ def needs_school_attention(student,payload=None):
         latest=student.submissions.order_by('-version').first()
         payload=latest.payload if latest else {}
     if not payload:return False
-    return check_status(BY_KEY['V'],payload.get('checks',{}).get('V',{}))=='unconfirmed'
+    class_check=payload.get('checks',{}).get('V')
+    return bool(class_check) and check_status(BY_KEY['V'],class_check)=='unconfirmed'
+
+
+def public_review_issues(student):
+    """Return non-sensitive issue labels suitable for the public progress rosters."""
+    submissions = getattr(student, 'progress_submissions', None)
+    if submissions is None:
+        submissions = list(student.submissions.order_by('version'))
+    latest_payload = submissions[-1].payload if submissions else {}
+    issues = []
+    if needs_school_attention(student, latest_payload):
+        issues.append('班级信息待核实')
+
+    legacy_issue_version = None
+    submitted_y_versions = []
+    for submission in submissions:
+        payload = submission.payload
+        values = payload.get('values', {})
+        y_check = payload.get('checks', {}).get('Y', {})
+        if 'Y' in values:
+            submitted_y_versions.append(submission.version)
+        elif y_check.get('result') in {'incorrect', 'unconfirmed'}:
+            legacy_issue_version = submission.version
+    if legacy_issue_version is not None and not any(
+        version > legacy_issue_version for version in submitted_y_versions
+    ):
+        current_y = student.draft.get('Y', {})
+        if check_status(BY_KEY['Y'], current_y) != 'confirmed':
+            issues.append('全国学籍号待重新核对')
+    return issues
 
 def safe_cell(cell,value):
     cell.value=value

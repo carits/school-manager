@@ -14,7 +14,7 @@ from .models import Batch,Student,Submission,ImportPreview
 from .crypto import encrypt,decrypt,identity,digest
 from .schema import FIELDS,VISIBLE,GROUPS,BY_KEY,REGION_KEYS,SENSITIVE,MACAU_REGIONS,validate_checks,valid_id
 from .regions import REGION_TREE,split_region
-from .services import commit_import,save_draft,submit,reopen,parse_import,export_workbook,attempt,safe_cell
+from .services import commit_import,save_draft,submit,reopen,parse_import,export_workbook,attempt,safe_cell,public_review_issues
 from .management.commands.seed_demo import demo_rows
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -438,12 +438,44 @@ class FlowTests(TestCase):
         self.assertNotContains(head_page,'查看本班学生')
         self.assertContains(head_page,'未核对（1）')
         self.assertContains(head_page,'已核对（0）')
+        self.assertContains(head_page,'核对有误（0）')
         self.assertEqual(head_page.context['status_filter'],'all')
         self.assertEqual(head_page.context['selected_count'],1)
         pending=Client().get(reverse('pending_head_campus'),{'status':'pending'})
         self.assertEqual(list(pending.context['students'].values_list('pk',flat=True)),[head.pk])
         submitted=Client().get(reverse('pending_head_campus'),{'status':'submitted'})
         self.assertFalse(submitted.context['students'].exists())
+
+    def test_public_progress_rosters_show_specific_issue_students(self):
+        national=self.student
+        national.status='draft';national.has_issue=True
+        national.draft_cipher=encrypt({'Y':{'result':'unconfirmed','value':national.current()['Y'],'mode':'direct'}})
+        national.save(update_fields=['status','has_issue','draft_cipher'])
+        Submission.objects.create(student=national,version=1,payload_cipher=encrypt({
+            'values':{},'checks':{'Y':{'result':'unconfirmed','note':''}},'changes':{},'signature':'existing-signature'}))
+        self.assertEqual(public_review_issues(national),['全国学籍号待重新核对'])
+        unrelated=Student.objects.get(batch=self.batch,source_row=4)
+        Submission.objects.create(student=unrelated,version=1,payload_cipher=encrypt({
+            'values':{},'checks':{},'changes':{},'signature':'existing-signature'}))
+        self.assertEqual(public_review_issues(unrelated),[])
+
+        regular=Client().get(reverse('pending_classes'),{'class':'2601','status':'issue'})
+        self.assertContains(regular,national.name)
+        self.assertContains(regular,'全国学籍号待重新核对')
+        self.assertContains(regular,'核对有误（1）')
+        self.assertNotContains(regular,Student.objects.get(batch=self.batch,source_row=3).name)
+
+        class_issue=Student.objects.get(batch=self.batch,source_row=3)
+        class_issue.progress_group='benbu';class_issue.status='submitted';class_issue.has_issue=True
+        class_issue.save(update_fields=['progress_group','status','has_issue'])
+        Submission.objects.create(student=class_issue,version=1,payload_cipher=encrypt({
+            'values':{},'checks':{'V':{'result':'unconfirmed','note':'班级有误'}},'changes':{},'signature':'existing-signature'}))
+        head=Client().get(reverse('pending_head_campus'),{'status':'issue'})
+        self.assertContains(head,class_issue.name)
+        self.assertContains(head,'班级信息待核实')
+        self.assertContains(head,'核对有误（1）')
+        self.assertNotContains(head,national.name)
+        self.assertNotContains(head,'href="/xueji/manage/')
 
     def test_assign_progress_group_command_is_atomic(self):
         students=list(Student.objects.filter(batch=self.batch).order_by('source_row')[:2])
