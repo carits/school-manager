@@ -301,6 +301,7 @@ def pending_classes(request,group='regular'):
     pending_total=query.exclude(status='submitted').count();submitted_total=query.filter(status='submitted').count()
     issue_map={}
     issue_counts={}
+    national_issue_counts={}
     issue_students=query.filter(has_issue=True).prefetch_related(
         Prefetch('submissions',queryset=Submission.objects.order_by('version'),to_attr='progress_submissions')
     )
@@ -309,7 +310,10 @@ def pending_classes(request,group='regular'):
         if labels:
             issue_map[student.pk]=labels
             issue_counts[student.class_name]=issue_counts.get(student.class_name,0)+1
+            if '全国学籍号待重新核对' in labels:
+                national_issue_counts[student.class_name]=national_issue_counts.get(student.class_name,0)+1
     issue_ids=set(issue_map)
+    national_issue_ids={student_id for student_id,labels in issue_map.items() if '全国学籍号待重新核对' in labels}
     class_rows=[]
     for row in query.values('class_name').annotate(
         total=Count('pk'),submitted=Count('pk',filter=Q(status='submitted')),
@@ -317,31 +321,35 @@ def pending_classes(request,group='regular'):
     ).order_by('class_name'):
         row['pending']=row['total']-row['submitted']
         row['issues']=issue_counts.get(row['class_name'],0)
+        row['national_issues']=national_issue_counts.get(row['class_name'],0)
         row['label']=row['class_name'] or '未分班'
         row['key']=row['class_name'] or '__blank__'
         class_rows.append(row)
     selected_key=request.GET.get('class')
     selected=next((row for row in class_rows if row['key']==selected_key),None) if group=='regular' else None
     status_filter=request.GET.get('status','all' if group=='benbu' else 'pending')
-    if status_filter not in {'pending','submitted','issue','all'}:status_filter='pending'
+    if status_filter not in {'pending','submitted','issue','national_issue','all'}:status_filter='pending'
     students=query.order_by('class_name','source_row') if group=='benbu' else query.none()
     if group=='benbu':
         if status_filter=='pending':students=students.exclude(status='submitted')
         elif status_filter=='submitted':students=students.filter(status='submitted')
         elif status_filter=='issue':students=students.filter(pk__in=issue_ids)
+        elif status_filter=='national_issue':students=students.filter(pk__in=national_issue_ids)
     if selected:
         students=query.filter(class_name=selected['class_name']).order_by('source_row')
         if status_filter=='pending':students=students.exclude(status='submitted')
         elif status_filter=='submitted':students=students.filter(status='submitted')
         elif status_filter=='issue':students=students.filter(pk__in=issue_ids)
+        elif status_filter=='national_issue':students=students.filter(pk__in=national_issue_ids)
     selected_count=students.count() if selected or group=='benbu' else 0
     for student in students:student.review_issues=issue_map.get(student.pk,[])
-    filter_labels={'pending':'未核对','submitted':'已核对','issue':'核对有误','all':'全部'}
+    filter_labels={'pending':'未核对','submitted':'已核对','issue':'核对有误','national_issue':'学籍号有误','all':'全部'}
     return render(request,'pending_classes.html',{
         'batch':batch,'class_rows':class_rows,
         'selected':selected,'students':students,'pending_total':pending_total,'submitted_total':submitted_total,
         'group_total':query.count(),'status_filter':status_filter,'filter_label':filter_labels[status_filter],
         'issue_total':len(issue_ids),
+        'national_issue_total':len(national_issue_ids),
         'selected_count':selected_count,'is_head_campus':group=='benbu',
         'standalone':True,'group_label':groups[group][0],'progress_url_name':groups[group][1],
     })

@@ -439,6 +439,7 @@ class FlowTests(TestCase):
         self.assertContains(head_page,'未核对（1）')
         self.assertContains(head_page,'已核对（0）')
         self.assertContains(head_page,'核对有误（0）')
+        self.assertContains(head_page,'学籍号有误（0）')
         self.assertEqual(head_page.context['status_filter'],'all')
         self.assertEqual(head_page.context['selected_count'],1)
         pending=Client().get(reverse('pending_head_campus'),{'status':'pending'})
@@ -463,7 +464,11 @@ class FlowTests(TestCase):
         self.assertContains(regular,national.name)
         self.assertContains(regular,'全国学籍号待重新核对')
         self.assertContains(regular,'核对有误（1）')
+        self.assertContains(regular,'学籍号有误（1）')
         self.assertNotContains(regular,Student.objects.get(batch=self.batch,source_row=3).name)
+        national_only=Client().get(reverse('pending_classes'),{'class':'2601','status':'national_issue'})
+        self.assertContains(national_only,national.name)
+        self.assertContains(national_only,'全国学籍号待重新核对')
 
         class_issue=Student.objects.get(batch=self.batch,source_row=3)
         class_issue.progress_group='benbu';class_issue.status='submitted';class_issue.has_issue=True
@@ -474,8 +479,12 @@ class FlowTests(TestCase):
         self.assertContains(head,class_issue.name)
         self.assertContains(head,'班级信息待核实')
         self.assertContains(head,'核对有误（1）')
+        self.assertContains(head,'学籍号有误（0）')
         self.assertNotContains(head,national.name)
         self.assertNotContains(head,'href="/xueji/manage/')
+        head_national=Client().get(reverse('pending_head_campus'),{'status':'national_issue'})
+        self.assertNotContains(head_national,class_issue.name)
+        self.assertContains(head_national,'本部名单没有学籍号有误学生')
 
     def test_assign_progress_group_command_is_atomic(self):
         students=list(Student.objects.filter(batch=self.batch).order_by('source_row')[:2])
