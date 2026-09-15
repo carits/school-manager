@@ -256,7 +256,9 @@ class FlowTests(TestCase):
         self.assertContains(first,'value="旧草稿姓名"')
         self.assertContains(first,'name="result_B" value="confirmed" checked')
         second=self.client.get(reverse('step',args=[2]))
-        self.assertContains(second,'name="result_V" value="unconfirmed" checked')
+        self.assertContains(second,'name="result_V" value="confirmed"')
+        self.assertNotContains(second,'name="result_V" value="unconfirmed"')
+        self.assertContains(second,'班级由学校统一维护，仅供查看，无需家长确认')
         self.assertContains(second,'name="value_Y" value="DEMO-NATIONAL-0001"')
         self.assertContains(second,'name="result_Y" value="unconfirmed" checked')
     def test_stale_readonly_national_id_form_preserves_value_during_deploy(self):
@@ -273,22 +275,20 @@ class FlowTests(TestCase):
     def test_readonly_injection_ignored(self):
         checks=self.all_checks();checks['V']={'result':'unconfirmed','value':'恶意班级','note':'请检查班级'}
         s=self.complete(checks)
-        self.assertEqual(s.current()['V'],'2601');self.assertTrue(s.has_issue)
+        self.assertEqual(s.current()['V'],'2601');self.assertFalse(s.has_issue)
         self.assertNotIn('value',s.draft['V'])
-        self.assertContains(self.client.get(reverse('result')),'有项目等待老师处理')
+        self.assertEqual(s.draft['V']['result'],'confirmed')
+        self.assertEqual(s.draft['V']['note'],'')
+        self.assertNotContains(self.client.get(reverse('result')),'学校核实')
         self.client.force_login(self.admin)
-        self.client.post(reverse('student_detail',args=[s.pk]),{'action':'school','V':'2601'})
-        s.refresh_from_db();self.assertFalse(s.has_issue)
         self.assertNotContains(self.client.get(reverse('student_detail',args=[s.pk])),'请检查班级')
-        self.assertContains(self.client.get(reverse('result')),'无待处理事项')
-    def test_reopened_class_issue_remains_visible_to_school(self):
+    def test_reopened_class_issue_is_ignored(self):
         checks=self.all_checks();checks['V']={'result':'unconfirmed','note':'请核实班级'}
         s=self.complete(checks);reopen(s.pk,self.admin);s.refresh_from_db()
-        self.assertEqual(s.status,'draft');self.assertTrue(s.has_issue)
+        self.assertEqual(s.status,'draft');self.assertFalse(s.has_issue)
         self.client.force_login(self.admin)
         dashboard=self.client.get(reverse('dashboard'))
-        self.assertEqual(dashboard.context['issues'],1)
-        self.assertContains(dashboard,'待核实')
+        self.assertEqual(dashboard.context['issues'],0)
     def test_submit_idempotent_and_edit_locked(self):
         s=self.complete();submit(s.pk,s.revision,self.TEST_SIGNATURE)
         self.assertEqual(Submission.objects.filter(student=s).count(),1)
@@ -476,9 +476,9 @@ class FlowTests(TestCase):
         Submission.objects.create(student=class_issue,version=1,payload_cipher=encrypt({
             'values':{},'checks':{'V':{'result':'unconfirmed','note':'班级有误'}},'changes':{},'signature':'existing-signature'}))
         head=Client().get(reverse('pending_head_campus'),{'status':'issue'})
-        self.assertContains(head,class_issue.name)
-        self.assertContains(head,'班级信息待核实')
-        self.assertContains(head,'核对有误（1）')
+        self.assertNotContains(head,class_issue.name)
+        self.assertNotContains(head,'班级信息待核实')
+        self.assertContains(head,'核对有误（0）')
         self.assertContains(head,'学籍号有误（0）')
         self.assertNotContains(head,national.name)
         self.assertNotContains(head,'href="/xueji/manage/')
@@ -523,7 +523,8 @@ class FlowTests(TestCase):
         confirmations=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'confirmations')))['逐项确认']
         national_row=next(row for row in confirmations.iter_rows(min_row=2,values_only=True) if row[4]=='全国学籍号')
         self.assertEqual(national_row[6],'学校');self.assertEqual(national_row[7],'未确认');self.assertEqual(national_row[10],'否')
-        self.assertContains(self.client.get(reverse('result')),'无待处理事项')
+        self.assertContains(self.client.get(reverse('result')),'重新核对并修改')
+        self.assertNotContains(self.client.get(reverse('result')),'学校核实')
         self.client.force_login(self.admin)
         dashboard=self.client.get(reverse('dashboard'))
         self.assertEqual(dashboard.context['issues'],0)

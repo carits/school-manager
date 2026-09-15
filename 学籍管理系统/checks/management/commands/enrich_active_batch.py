@@ -148,7 +148,7 @@ class Command(BaseCommand):
         if options["apply"]:
             with transaction.atomic():
                 for student, patch, credential_patch in changes:
-                    update_fields = ["school_cipher", "class_name", "has_issue"]
+                    update_fields = ["school_cipher", "class_name"]
                     if credential_patch:
                         original = student.original
                         for key in ("I", "J", "C", "D"):
@@ -162,8 +162,6 @@ class Command(BaseCommand):
                     student.school_cipher = encrypt(school)
                     if patch.get("V"):
                         student.class_name = patch["V"]
-                    final = {**student.original, **school}
-                    student.has_issue = not (clean(final.get("V")) and clean(final.get("Y")))
                     student.save(update_fields=update_fields)
                 audit("system-enrichment", "补充基本情况信息", batch.pk, {
                     "source_file": path.name,

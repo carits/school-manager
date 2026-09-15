@@ -96,8 +96,6 @@ def validate_checks(base, checks, fields=VISIBLE):
         key = f['key']; item = checks.get(key, {})
         status = check_status(f, item)
         if f['readonly']:
-            if status == 'confirmed' and not values.get(key):
-                errors[key] = '学校尚未填写此项，请选择未确认并交由学校处理。'
             continue
         error = validate_value(key, values.get(key,''), values)
         if error:

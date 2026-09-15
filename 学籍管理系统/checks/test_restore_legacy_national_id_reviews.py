@@ -31,6 +31,7 @@ class RestoreLegacyNationalIdReviewsTests(TestCase):
         call_command('restore_legacy_national_id_reviews', apply=True, expected_count=1)
         self.student.refresh_from_db()
         self.assertEqual(self.student.status, 'draft')
+        self.assertTrue(self.student.has_issue)
         self.assertEqual(self.student.revision, 1)
         self.assertEqual(self.student.draft['B'], self.original_draft['B'])
         self.assertEqual(self.student.draft['Y'], {

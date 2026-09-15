@@ -110,7 +110,7 @@ def commit_import(rows, fingerprint, title, user, demo=False):
     for row in rows:
         v=row['values']
         students.append(Student(batch=batch, source_row=row['row'], serial_hash=digest(v['A']), identity_hash=identity(v['B'],v['J']),
-                       name=v['B'], class_name=v['V'], original_cipher=encrypt(v), has_issue=not bool(v.get('V'))))
+                       name=v['B'], class_name=v['V'], original_cipher=encrypt(v)))
     Student.objects.bulk_create(students)
     audit(user,'导入批次',batch.pk,{'count':len(students),'demo':demo})
     return batch
@@ -124,7 +124,8 @@ def save_draft(student_id, revision, checks, fields):
     for f in fields:
         item=checks.get(f['key'],{})
         old=draft.get(f['key'],{})
-        draft[f['key']]={'result':check_status(f,item), 'note':str(item.get('note',''))[:500], 'mode':'direct'}
+        draft[f['key']]={'result':'confirmed' if f['readonly'] else check_status(f,item),
+                         'note':'' if f['readonly'] else str(item.get('note',''))[:500], 'mode':'direct'}
         if not f['readonly']:
             if 'value' not in item or (f['key'] in SENSITIVE and not item.get('loaded')):
                 value=check_value(base,f,old)
@@ -152,10 +153,7 @@ def submit(student_id, revision, signature=None):
     changes={k:{'old':base.get(k,''),'new':v} for k,v in editable.items() if v!=base.get(k,'')}
     Submission.objects.create(student=student,version=versions+1,payload_cipher=encrypt({'values':editable,'checks':checks,'changes':changes,'signature':signature}))
     student.status='submitted'; student.submitted_at=timezone.now(); student.change_count=len(changes)
-    student.has_issue=any(
-        check_status(field,checks.get(field['key'],{}))=='unconfirmed' or not values.get(field['key'])
-        for field in VISIBLE if field['readonly']
-    )
+    student.has_issue=False
     student.revision+=1; student.save()
     return student
 
@@ -167,16 +165,8 @@ def reopen(student_id,user):
     audit(user,'重新开放核对',s.pk)
 
 def needs_school_attention(student,payload=None):
-    """Return the current class issue without trusting legacy Y-based flags."""
-    if not student.has_issue:return False
-    school_values={**student.original,**student.school}
-    if not text_value(school_values.get('V','')):return True
-    if payload is None:
-        latest=student.submissions.order_by('-version').first()
-        payload=latest.payload if latest else {}
-    if not payload:return False
-    class_check=payload.get('checks',{}).get('V')
-    return bool(class_check) and check_status(BY_KEY['V'],class_check)=='unconfirmed'
+    """Class is school-maintained and no longer creates a parent review issue."""
+    return False
 
 
 def public_review_issues(student):
@@ -184,11 +174,7 @@ def public_review_issues(student):
     submissions = getattr(student, 'progress_submissions', None)
     if submissions is None:
         submissions = list(student.submissions.order_by('version'))
-    latest_payload = submissions[-1].payload if submissions else {}
     issues = []
-    if needs_school_attention(student, latest_payload):
-        issues.append('班级信息待核实')
-
     legacy_issue_version = None
     submitted_y_versions = []
     for submission in submissions:

@@ -17,8 +17,8 @@ class BatchAdmin(ReadOnlyAdmin):
 
 @admin.register(Student)
 class StudentAdmin(ReadOnlyAdmin):
-    list_display=['name','class_name','progress_group','status','has_issue','change_count','submitted_at']
-    list_filter=['batch','progress_group','status','has_issue','class_name']
+    list_display=['name','class_name','progress_group','status','change_count','submitted_at']
+    list_filter=['batch','progress_group','status','class_name']
     search_fields=['name']
     fields=list_display
 

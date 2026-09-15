@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<div class="page-heading"><div><span class="eyebrow">{{ student.class_name }} · {{ student.name }}</span><h1>{{ title }}</h1><p class="muted">已有内容和空白内容都可以直接修改。带 * 的项目必须填写并确认；非 * 项目未修改时可以暂不确认。</p></div><span class="step-count">{{ index }} / {{ group_names|length|add:1 }}</span></div>
+<div class="page-heading"><div><span class="eyebrow">{{ student.class_name }} · {{ student.name }}</span><h1>{{ title }}</h1><p class="muted">已有内容和空白内容都可以直接修改。带 * 的可编辑项目必须填写并确认；班级由学校维护，无需家长核对。</p></div><span class="step-count">{{ index }} / {{ group_names|length|add:1 }}</span></div>
 <nav class="steps" aria-label="核对步骤">{% for name in group_names %}<a class="{% if forloop.counter == index %}active{% endif %}" href="{% url 'step' forloop.counter %}"><span>{{ forloop.counter }}</span>{{ name }}</a>{% endfor %}<a href="{% url 'confirm' %}"><span>{{ group_names|length|add:1 }}</span>最终确认</a></nav>
 {% if notice %}<div class="alert alert-danger" role="alert">{{ notice }}</div>{% endif %}
 {% if error_count %}<div class="validation-summary" role="alert" aria-live="assertive" data-validation-summary><strong>还有 {{ error_count }} 项需要处理</strong><span>已为您定位到第一项，请按红色提示填写或确认。</span></div>{% endif %}
@@ -13,6 +13,8 @@
   {% if row.key == 'T' %}<aside class="field-guidance" id="field-guidance-T" aria-label="户籍类别填写说明"><strong class="field-guidance-title">户籍类别填写说明</strong><p>本项按学生在长沙的户籍或居住身份来源分类，不是“农业户口 / 非农业户口”的户口性质。</p><dl><div><dt>常驻</dt><dd>普通居民户籍。学生使用大陆居民身份证，且户口所在地在长沙市时，通常选择此项。</dd></div><div><dt>蓝印</dt><dd>历史上的蓝印户口人员使用，现在较少见。</dd></div><div><dt>人才引进居住证</dt><dd>因人才引进政策取得相关居住资格的学生使用。</dd></div><div><dt>务工人员居住证</dt><dd>外地户籍，父母在长沙务工，依靠居住证等在长沙就读的学生使用。</dd></div><div><dt>在长就读的港澳台侨学生</dt><dd>港澳台或华侨身份、在长沙就读的学生使用。</dd></div><div><dt>在长就读的外国籍学生</dt><dd>外国国籍、在长沙就读的学生使用。</dd></div><div><dt>其他</dt><dd>确实不属于以上任何类别时使用。</dd></div></dl><p class="field-guidance-note">请按学生实际情况选择；不确定时请先核实，不要统一选择“其他”。</p></aside>{% endif %}
   {% if row.readonly %}
     <div class="school-value">{% if row.current %}{{ row.current }}{% else %}<span class="missing">学校尚未填写</span>{% endif %}</div>
+    <p class="hint">班级由学校统一维护，仅供查看，无需家长确认。</p>
+    <input type="hidden" name="result_{{ row.key }}" value="confirmed">
   {% elif row.sensitive %}
     {% if not row.sensitive_loaded %}<div class="sensitive-summary"><span data-current>{{ row.display }}</span><button class="text-button reveal" type="submit" name="action" value="reveal-sensitive:{{ row.key }}" formnovalidate data-reveal="{% url 'reveal' row.key %}">显示完整号码并修改</button></div>{% endif %}
     <input type="hidden" name="loaded_{{ row.key }}" value="{% if row.sensitive_loaded %}1{% else %}0{% endif %}" data-sensitive-loaded>
@@ -39,9 +41,9 @@
     {% endif %}
     </div>
   {% endif %}
-  <div class="confirmation-label">核对状态</div>
+  {% if not row.readonly %}<div class="confirmation-label">核对状态</div>
   <div class="check-options"><label class="confirmed-option"><input type="radio" name="result_{{ row.key }}" value="confirmed" {% if row.result == 'confirmed' %}checked{% endif %}><span class="status-choice">✓ 已确认</span></label><label class="unconfirmed-option"><input type="radio" name="result_{{ row.key }}" value="unconfirmed" {% if row.result == 'unconfirmed' %}checked{% endif %}><span class="status-choice">! 未确认</span></label></div>
-  {% if row.readonly %}<div class="readonly-note" {% if row.result == 'confirmed' %}hidden{% endif %}><label for="note_{{ row.key }}">问题说明（选填）</label><input class="form-control" id="note_{{ row.key }}" name="note_{{ row.key }}" value="{{ row.note }}" maxlength="500" placeholder="请说明需要老师核实的内容"><p class="hint">此项由学校维护，选择未确认后会交由老师处理。</p></div>{% endif %}
+  {% endif %}
 </section>
 {% endfor %}
 </div>

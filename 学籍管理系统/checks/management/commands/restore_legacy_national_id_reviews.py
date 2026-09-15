@@ -76,7 +76,8 @@ class Command(BaseCommand):
                 }
                 student.draft_cipher = encrypt(draft)
                 student.status = 'draft'
+                student.has_issue = True
                 student.revision += 1
-                student.save(update_fields=['draft_cipher', 'status', 'revision'])
+                student.save(update_fields=['draft_cipher', 'status', 'has_issue', 'revision'])
                 repaired += 1
         self.stdout.write(f'repaired={repaired}')
