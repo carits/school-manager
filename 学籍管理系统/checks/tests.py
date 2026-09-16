@@ -367,6 +367,10 @@ class FlowTests(TestCase):
         self.assertFalse(any(str(value).endswith('市辖区') for value in area_values))
         self.assertEqual(len(wb['新生1'].data_validations.dataValidation),49)
         self.assertEqual(wb['新生1'].max_column,86)
+    def test_final_export_uses_prefetched_submissions(self):
+        with self.assertNumQueries(2):
+            data=export_workbook(self.batch,'final')
+        self.assertTrue(data.startswith(b'PK'))
     def test_pending_export_and_changes(self):
         self.complete()
         wb=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'pending')))

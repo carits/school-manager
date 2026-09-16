@@ -69,6 +69,30 @@
     });
   }
 
+  var exportLinks = document.querySelectorAll('[data-export-download]');
+  var exportStatus = document.querySelector('[data-export-status]');
+  var exportIndex;
+  for (exportIndex = 0; exportIndex < exportLinks.length; exportIndex += 1) {
+    exportLinks[exportIndex].addEventListener('click', function () {
+      var link = this;
+      var original = link.getAttribute('data-export-label') || link.textContent;
+      link.setAttribute('data-export-label', original);
+      link.setAttribute('aria-busy', 'true');
+      addClass(link, 'export-busy');
+      link.textContent = '正在生成，请稍候…';
+      if (exportStatus) {
+        exportStatus.hidden = false;
+        exportStatus.textContent = '正在生成 Excel，请保持页面打开。通常需要几秒钟，请勿重复点击。';
+      }
+      window.setTimeout(function () {
+        link.textContent = original;
+        link.removeAttribute('aria-busy');
+        removeClass(link, 'export-busy');
+        if (exportStatus) exportStatus.textContent = '如果浏览器尚未提示保存，请再次点击对应文件。';
+      }, 15000);
+    });
+  }
+
   var firstError = document.querySelector('[data-first-error]');
   if (firstError) window.setTimeout(function () {
     try { firstError.scrollIntoView(true); } catch (ignore) { window.location.hash = firstError.id; }

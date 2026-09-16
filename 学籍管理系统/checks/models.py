@@ -47,7 +47,11 @@ class Student(models.Model):
     def draft(self): return decrypt(self.draft_cipher)
     def current(self):
         values = self.original
-        latest = self.submissions.order_by('-version').first()
+        prefetched = getattr(self, '_prefetched_objects_cache', {}).get('submissions')
+        if prefetched is None:
+            latest = self.submissions.order_by('-version').first()
+        else:
+            latest = max(prefetched, key=lambda submission: submission.version, default=None)
         submitted = latest.payload['values'] if latest else {}
         if latest:
             values.update(submitted)
