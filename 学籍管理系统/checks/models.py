@@ -47,19 +47,18 @@ class Student(models.Model):
     def draft(self): return decrypt(self.draft_cipher)
     def current(self):
         values = self.original
+        values.update(self.school)
+        school_class = values.get('V', '')
         prefetched = getattr(self, '_prefetched_objects_cache', {}).get('submissions')
         if prefetched is None:
             latest = self.submissions.order_by('-version').first()
         else:
             latest = max(prefetched, key=lambda submission: submission.version, default=None)
         submitted = latest.payload['values'] if latest else {}
-        if latest:
-            values.update(submitted)
-        values.update(self.school)
-        # Y changed from school-maintained to parent-editable. Historical submissions do not
-        # contain Y, while new submissions must take precedence over its old school baseline.
-        if 'Y' in submitted:
-            values['Y'] = submitted['Y']
+        values.update(submitted)
+        # Class remains school-maintained. Every editable field comes from the latest parent
+        # submission when present, including values that were originally enriched by school.
+        values['V'] = school_class
         return values
 
 class Submission(models.Model):

@@ -329,6 +329,15 @@ class FlowTests(TestCase):
         self.assertEqual(s.status,'draft');self.assertEqual(s.draft,{})
         s=save_draft(s.pk,s.revision,self.all_checks(),VISIBLE);submit(s.pk,s.revision,self.TEST_SIGNATURE)
         self.assertEqual(s.submissions.count(),2)
+    def test_current_and_final_export_use_latest_submission_version(self):
+        checks=self.all_checks();checks['R']={'result':'confirmed','value':'第一版地址','mode':'direct'}
+        s=self.complete(checks);reopen(s.pk,self.admin);s.refresh_from_db();self.student=s
+        checks=self.all_checks();checks['R']={'result':'confirmed','value':'最后一版地址','mode':'direct'}
+        s=self.complete(checks)
+        self.assertEqual(s.submissions.count(),2)
+        self.assertEqual(s.current()['R'],'最后一版地址')
+        workbook=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'final')))
+        self.assertEqual(workbook['新生1']['R2'].value,'最后一版地址')
     def test_parent_can_reopen_own_submission_without_losing_history(self):
         s=self.complete();before=s.current();old_revision=s.revision
         response=self.client.post(reverse('result'),{'action':'reopen'})
@@ -355,6 +364,18 @@ class FlowTests(TestCase):
         workbook=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'final')))
         self.assertEqual(workbook['新生1']['Y2'].value,'G430100201401010002')
         self.assertEqual(workbook['新生1']['Y2'].data_type,'s')
+    def test_latest_parent_version_overrides_school_baseline_for_editable_fields(self):
+        school={'V':'学校班级','Q':'湖南省长沙市天心区','R':'学校地址','BO':'湖南省长沙市岳麓区','BP':'学校成员地址'}
+        self.student.school_cipher=encrypt(school);self.student.class_name='学校班级';self.student.save(update_fields=['school_cipher','class_name'])
+        checks=self.all_checks()
+        replacements={'Q':'湖南省长沙市雨花区','R':'家长最后地址','BO':'湖南省长沙市开福区','BP':'家长最后成员地址'}
+        for key,value in replacements.items():checks[key]={'result':'confirmed','value':value,'mode':'direct'}
+        s=self.complete(checks)
+        current=s.current()
+        self.assertEqual(current['V'],'学校班级')
+        for key,value in replacements.items():self.assertEqual(current[key],value)
+        workbook=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'final')))
+        for key,value in replacements.items():self.assertEqual(workbook['新生1'][f'{key}2'].value,value)
     def test_export_preserves_template_nonrequired_and_strings(self):
         checks=self.all_checks();checks['AA']={'result':'confirmed','value':'=1+1'};s=self.complete(checks)
         wb=openpyxl.load_workbook(io.BytesIO(export_workbook(self.batch,'final')))
