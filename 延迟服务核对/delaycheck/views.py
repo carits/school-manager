@@ -1,15 +1,18 @@
-import io,random,string
+import random,string,html
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.http import HttpResponse,JsonResponse
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404,redirect,render
 from django.utils import timezone
 from .crypto import lookup,encrypt
 from .models import Batch,Student,Submission
 def captcha(request):
  code=''.join(random.choice(string.ascii_uppercase+string.digits) for _ in range(4)); request.session['yanchi_captcha']=code
- return JsonResponse({'code':code})
+ text=''.join('<text x="{}" y="{}" transform="rotate({} {} {})">{}</text>'.format(18+i*25, random.randint(29,40), random.randint(-12,12), 18+i*25, 30, html.escape(ch)) for i,ch in enumerate(code))
+ lines=''.join('<line x1="{}" y1="{}" x2="{}" y2="{}"/>'.format(random.randint(0,95),random.randint(8,48),random.randint(90,160),random.randint(8,48)) for _ in range(5))
+ body='<svg xmlns="http://www.w3.org/2000/svg" width="150" height="52" viewBox="0 0 150 52"><rect width="150" height="52" rx="6" fill="#f2f6fb"/><g stroke="#9fb4cc" stroke-width="1">{}</g><g fill="#1f5e9c" font-family="Arial,sans-serif" font-size="24" font-weight="700">{}</g></svg>'.format(lines,text)
+ response=HttpResponse(body,content_type='image/svg+xml; charset=utf-8'); response['Cache-Control']='no-store'; return response
 def login(request):
  if request.method=='POST':
   name=request.POST.get('name','').strip(); identity=request.POST.get('identity','').strip().upper(); code=request.POST.get('captcha','').strip().upper()
