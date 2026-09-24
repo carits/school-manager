@@ -2,7 +2,7 @@ import random,string,html
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.http import HttpResponse
+from django.http import HttpResponse,JsonResponse
 from django.shortcuts import get_object_or_404,redirect,render
 from django.utils import timezone
 from .crypto import lookup,encrypt
