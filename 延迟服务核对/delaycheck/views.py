@@ -20,6 +20,11 @@ def login(request):
   name=request.POST.get('name','').strip(); identity=request.POST.get('identity','').strip().upper(); code=request.POST.get('captcha','').strip().upper()
   if code!=request.session.get('yanchi_captcha'): return render(request,'delaycheck/login.html',{'error':'验证码不正确。'})
   student=Student.objects.filter(batch__active=True,name_key=lookup(name),identity_key=lookup(identity)).first()
+  # Preserve access to records imported before a lookup-key rotation without rewriting stored data.
+  if not student:
+   for candidate in Student.objects.filter(batch__active=True).iterator():
+    if candidate.name == name and candidate.identity == identity:
+     student=candidate; break
   if not student:return render(request,'delaycheck/login.html',{'error':'姓名或身份证号不匹配，请使用学校登记信息。'})
   request.session['yanchi_student_id']=student.pk; return redirect('check')
  return render(request,'delaycheck/login.html')
