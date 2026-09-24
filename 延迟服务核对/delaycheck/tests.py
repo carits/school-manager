@@ -2,6 +2,9 @@ from django.test import TestCase
 from django.urls import reverse
 from .crypto import encrypt, lookup
 from .models import Batch, Student, Submission
+from django.contrib.auth import get_user_model
+from io import BytesIO
+from openpyxl import load_workbook
 
 
 class ParentFlowTests(TestCase):
@@ -39,3 +42,18 @@ class ParentFlowTests(TestCase):
         self.student.status = 'submitted'; self.student.save(update_fields=['status'])
         response = self.client.get(reverse('progress'), {'class': '2601', 'status': 'pending'})
         self.assertNotContains(response, '测试学生')
+
+    def test_staff_workspace_and_latest_phone_export(self):
+        admin = get_user_model().objects.create_user(username='admin', password='secret', is_staff=True, is_superuser=True)
+        Submission.objects.create(student=self.student, version=1, phone_cipher=encrypt({'value': '13900139000'}), issue=False)
+        Submission.objects.create(student=self.student, version=2, phone_cipher=encrypt({'value': '13600136000'}), issue=True)
+        self.student.status='submitted'; self.student.phone_issue=True; self.student.save(update_fields=['status','phone_issue'])
+        self.client.force_login(admin)
+        response = self.client.get(reverse('manage'), {'q': '测试学生'})
+        self.assertContains(response, '测试学生')
+        export = self.client.get(reverse('manage_export'), {'q': '测试学生'})
+        self.assertEqual(export.status_code, 200)
+        sheet = load_workbook(BytesIO(export.content), read_only=True).active
+        values = [cell for row in sheet.iter_rows(values_only=True) for cell in row]
+        self.assertIn('13600136000', values)
+        self.assertNotIn('13900139000', values)
