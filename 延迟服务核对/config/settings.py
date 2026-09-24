@@ -4,6 +4,8 @@ BASE_DIR=Path(__file__).resolve().parent.parent
 SECRET_KEY=os.environ.get('SECRET_KEY','change-me'); DEBUG=False
 ALLOWED_HOSTS=os.environ.get('ALLOWED_HOSTS','127.0.0.1,localhost').split(',')
 CSRF_TRUSTED_ORIGINS=[v.strip() for v in os.environ.get('CSRF_TRUSTED_ORIGINS','https://carits.top').split(',') if v.strip()]
+LOGIN_URL='/yanchi/manage/login/'
+LOGIN_REDIRECT_URL='/yanchi/manage/'
 PUBLIC_URL=os.environ.get('PUBLIC_URL','https://carits.top/yanchi/').rstrip('/')+'/'
 HTTPS_ENABLED=os.environ.get('HTTPS_ENABLED','1')=='1'
 DATA_KEY=os.environ.get('DATA_KEY','change-data-key'); LOOKUP_KEY=os.environ.get('LOOKUP_KEY','change-lookup-key')
