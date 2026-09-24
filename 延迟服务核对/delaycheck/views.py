@@ -1,4 +1,6 @@
 import random,string,html
+from io import BytesIO
+from openpyxl import Workbook
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
@@ -55,5 +57,18 @@ def progress(request):
  elif status=='issue': qs=qs.filter(phone_issue=True)
  selected_base=base.filter(class_name=klass) if klass else base
  return render(request,'delaycheck/progress.html',{'batch':batch,'classes':classes,'selected_class':klass,'status':status,'students':qs.order_by('class_name','name'),'total':total,'submitted_total':selected_base.filter(status='submitted').count() if klass else submitted_total,'pending_total':selected_base.exclude(status='submitted').count() if klass else pending_total,'issue_total':selected_base.filter(phone_issue=True).count() if klass else issue_total,'class_rows':class_rows})
+def progress_export(request):
+ batch=Batch.objects.filter(active=True).first(); klass=request.GET.get('class',''); status=request.GET.get('status','all')
+ qs=Student.objects.filter(batch=batch) if batch else Student.objects.none()
+ if klass: qs=qs.filter(class_name=klass)
+ if status=='pending': qs=qs.exclude(status='submitted')
+ elif status=='submitted': qs=qs.filter(status='submitted')
+ elif status=='issue': qs=qs.filter(phone_issue=True)
+ book=Workbook(); sheet=book.active; sheet.title='延时服务手机核对'
+ sheet.append(['班级','姓名','核对状态','手机号状态'])
+ for student in qs.order_by('class_name','name'):
+  sheet.append([student.class_name,student.name,'已核对' if student.status=='submitted' else ('核对中' if student.status=='draft' else '未开始'),'手机号有误' if student.phone_issue else ('已确认' if student.status=='submitted' else '')])
+ output=BytesIO(); book.save(output); output.seek(0)
+ response=HttpResponse(output.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="yanchi-progress.xlsx"'; return response
 def logout(request): request.session.flush();return redirect('login')
 def health(request): return JsonResponse({'status':'ok','service':'yanchi'})
