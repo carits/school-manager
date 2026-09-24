@@ -3,6 +3,9 @@ from io import BytesIO
 from openpyxl import Workbook
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
+from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.views import LoginView
+from django.core.paginator import Paginator
 from django.db import transaction
 from django.http import HttpResponse,JsonResponse
 from django.shortcuts import get_object_or_404,redirect,render
@@ -77,3 +80,39 @@ def progress_export(request):
  response=HttpResponse(output.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="yanchi-progress.xlsx"'; return response
 def logout(request): request.session.flush();return redirect('login')
 def health(request): return JsonResponse({'status':'ok','service':'yanchi'})
+
+def admin_login(request):
+ return LoginView.as_view(template_name='delaycheck/admin_login.html',redirect_authenticated_user=True)(request)
+def admin_redirect(request): return redirect('manage')
+def _manage_queryset(request):
+ batch=Batch.objects.filter(active=True).first(); qs=Student.objects.filter(batch=batch) if batch else Student.objects.none()
+ q=request.GET.get('q','').strip(); klass=request.GET.get('class','').strip(); status=request.GET.get('status','').strip()
+ if q: qs=qs.filter(name__icontains=q)
+ if klass: qs=qs.filter(class_name=klass)
+ if status in {'new','draft','submitted'}: qs=qs.filter(status=status)
+ if status=='issue': qs=qs.filter(phone_issue=True)
+ return batch,qs,q,klass,status
+@staff_member_required(login_url='/yanchi/manage/login/')
+def manage(request):
+ batch,qs,q,klass,status=_manage_queryset(request); all_students=Student.objects.filter(batch=batch) if batch else Student.objects.none()
+ classes=list(all_students.values_list('class_name',flat=True).distinct().order_by('class_name'))
+ paginator=Paginator(qs.order_by('class_name','name'),50); page=paginator.get_page(request.GET.get('page'))
+ for student in page.object_list: student.latest_submission=student.submissions.order_by('-version').first()
+ stats={'total':all_students.count(),'submitted':all_students.filter(status='submitted').count(),'pending':all_students.exclude(status='submitted').count(),'issue':all_students.filter(phone_issue=True).count()}
+ return render(request,'delaycheck/manage.html',{'batch':batch,'students':page,'classes':classes,'stats':stats,'q':q,'selected_class':klass,'status':status})
+@staff_member_required(login_url='/yanchi/manage/login/')
+def manage_student(request,pk):
+ student=get_object_or_404(Student.objects.select_related('batch'),pk=pk,batch__active=True)
+ if request.method=='POST' and request.POST.get('action')=='reopen':
+  student.status='draft'; student.revision+=1; student.save(update_fields=['status','revision','updated_at']); return redirect('manage_student',pk=student.pk)
+ history=list(student.submissions.order_by('-version')); latest=history[0] if history else None
+ return render(request,'delaycheck/manage_student.html',{'student':student,'latest':latest,'history':history})
+@staff_member_required(login_url='/yanchi/manage/login/')
+def manage_export(request):
+ batch,qs,q,klass,status=_manage_queryset(request)
+ book=Workbook(); sheet=book.active; sheet.title='延时服务最新手机号'; sheet.append(['班级','姓名','最新手机号','手机号状态','核对状态','最后提交时间','提交版本'])
+ for student in qs.order_by('class_name','name'):
+  latest=student.submissions.order_by('-version').first(); phone=latest.phone if latest else student.original_phone
+  sheet.append([student.class_name,student.name,phone,'手机号有误' if student.phone_issue else ('已确认' if student.status=='submitted' else ''),student.get_status_display(),student.submitted_at.strftime('%Y-%m-%d %H:%M:%S') if student.submitted_at else '',latest.version if latest else 0])
+ output=BytesIO(); book.save(output); output.seek(0)
+ response=HttpResponse(output.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="yanchi-latest-phones.xlsx"'; return response
