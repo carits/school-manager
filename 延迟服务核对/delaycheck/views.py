@@ -40,12 +40,20 @@ def result(request):
  if request.method=='POST': student.status='draft';student.revision+=1;student.save(update_fields=['status','revision','updated_at']);return redirect('check')
  return render(request,'delaycheck/result.html',{'student':student,'latest':latest})
 def progress(request):
- batch=Batch.objects.filter(active=True).first(); klass=request.GET.get('class',''); status=request.GET.get('status','all'); qs=Student.objects.filter(batch=batch)
- classes=list(qs.values_list('class_name',flat=True).distinct().order_by('class_name')) if batch else []
+ batch=Batch.objects.filter(active=True).first(); klass=request.GET.get('class',''); status=request.GET.get('status','all')
+ base=Student.objects.filter(batch=batch) if batch else Student.objects.none()
+ classes=list(base.values_list('class_name',flat=True).distinct().order_by('class_name')) if batch else []
+ total=base.count(); submitted_total=base.filter(status='submitted').count(); issue_total=base.filter(phone_issue=True).count(); pending_total=base.exclude(status='submitted').count()
+ class_rows=[]
+ for name in classes:
+  group=base.filter(class_name=name); submitted=group.filter(status='submitted').count(); issues=group.filter(phone_issue=True).count()
+  class_rows.append({'key':name,'label':name+'班','total':group.count(),'submitted':submitted,'pending':group.exclude(status='submitted').count(),'issues':issues})
+ qs=base
  if klass: qs=qs.filter(class_name=klass)
- if status=='pending':qs=qs.exclude(status='submitted')
- elif status=='submitted':qs=qs.filter(status='submitted')
- elif status=='issue':qs=qs.filter(phone_issue=True)
- return render(request,'delaycheck/progress.html',{'batch':batch,'classes':classes,'selected_class':klass,'status':status,'students':qs.order_by('class_name','name'),'total':qs.count()})
+ if status=='pending': qs=qs.exclude(status='submitted')
+ elif status=='submitted': qs=qs.filter(status='submitted')
+ elif status=='issue': qs=qs.filter(phone_issue=True)
+ selected_base=base.filter(class_name=klass) if klass else base
+ return render(request,'delaycheck/progress.html',{'batch':batch,'classes':classes,'selected_class':klass,'status':status,'students':qs.order_by('class_name','name'),'total':total,'submitted_total':selected_base.filter(status='submitted').count() if klass else submitted_total,'pending_total':selected_base.exclude(status='submitted').count() if klass else pending_total,'issue_total':selected_base.filter(phone_issue=True).count() if klass else issue_total,'class_rows':class_rows})
 def logout(request): request.session.flush();return redirect('login')
 def health(request): return JsonResponse({'status':'ok','service':'yanchi'})
