@@ -1,7 +1,8 @@
 FROM node:22-bookworm AS native
 
 ARG OPENCV_VERSION=4.13.0
-RUN printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4 \
+RUN sed -i 's#deb.debian.org/debian#mirrors.tuna.tsinghua.edu.cn/debian#g; s#security.debian.org/debian-security#mirrors.tuna.tsinghua.edu.cn/debian-security#g' /etc/apt/sources.list.d/debian.sources \
+    && printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4 \
     && apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git pkg-config nlohmann-json3-dev \
     libjpeg-dev libpng-dev libtiff-dev libwebp-dev libopenjp2-7-dev \
@@ -30,7 +31,8 @@ RUN cmake -S /src/native/AnswerCardRecognizer -B /src/native/AnswerCardRecognize
 
 FROM node:22-bookworm AS build
 WORKDIR /app
-RUN printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4 \
+RUN sed -i 's#deb.debian.org/debian#mirrors.tuna.tsinghua.edu.cn/debian#g; s#security.debian.org/debian-security#mirrors.tuna.tsinghua.edu.cn/debian-security#g' /etc/apt/sources.list.d/debian.sources \
+    && printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4 \
     && apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
@@ -45,7 +47,8 @@ ENV PORT=5174
 ENV PROJECTX_ENABLE_SCANNER=0
 ENV PROJECTX_ENABLE_SCANNER_CLIENT_API=0
 WORKDIR /app
-RUN printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4 \
+RUN sed -i 's#deb.debian.org/debian#mirrors.tuna.tsinghua.edu.cn/debian#g; s#security.debian.org/debian-security#mirrors.tuna.tsinghua.edu.cn/debian-security#g' /etc/apt/sources.list.d/debian.sources \
+    && printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4 \
     && apt-get update && apt-get install -y --no-install-recommends poppler-utils ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/package.json /app/package-lock.json ./
