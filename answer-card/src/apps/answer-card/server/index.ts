@@ -142,6 +142,7 @@ import { assertActiveClassScope } from "../../../server/services/activeClassScop
 import { parseIdentityMode } from "../../../shared/cardIdentity";
 import { recognizeAnswerCard, recognizeObjectiveAnswers } from "./recognition";
 import { createScannerRouter } from "./scanner/index";
+import { createWenjuanRouter } from "./wenjuan";
 import { makeScannerAuth } from "../../../server/middleware/scanner-auth";
 import { enforceScannerCardScope } from "../../../server/middleware/scanner-scope";
 
@@ -933,6 +934,10 @@ export async function createApp(): Promise<express.Express> {
   app.use("/api/auth", authRoutes);
   // 强制改密账号的自助认证端点已在上方处理；其它 API 一律拒绝。
   app.use("/api", requirePasswordChangeCompleted);
+
+  // 独立的评教评学问卷入口：复用本系统账号，但文件、任务和导出数据存放在
+  // data/answer-card/wenjuan 下，不写入考试/答题卡业务表。
+  app.use("/api/wenjuan", authMiddleware, createWenjuanRouter());
 
   // ── 用户自身设置（无需管理员权限） ──
   // GET  /api/users/me/settings — 读取当前用户设置

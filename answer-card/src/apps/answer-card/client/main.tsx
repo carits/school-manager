@@ -5,6 +5,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import App from "./App";
+import WenjuanApp from "./WenjuanApp";
 import { AuthProvider } from "./auth/AuthContext";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 // 唯一样式入口：app.css 内部按 theme < base < components < utilities 的层序引入 tokens.css，顺序不得在此绕过。
@@ -43,11 +44,13 @@ const router = createBrowserRouter([
   },
 ], { basename: "/answer-card" });
 
+const isWenjuan = typeof window !== "undefined" && /^\/wenjuan(?:\/|$)/.test(window.location.pathname);
+
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <AuthProvider>
-        <RouterProvider router={router} />
+        {isWenjuan ? <WenjuanApp /> : <RouterProvider router={router} />}
       </AuthProvider>
     </ErrorBoundary>
   </React.StrictMode>

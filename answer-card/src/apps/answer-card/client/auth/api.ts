@@ -19,8 +19,9 @@ function getApiBase(): string {
   // The production web app is mounted below /answer-card/. Keep local
   // development at the root while making same-origin API calls work through
   // the Nginx path prefix in production.
-  if (typeof window !== "undefined" && /^\/answer-card(?:\/|$)/.test(window.location.pathname)) {
-    return "/answer-card";
+  if (typeof window !== "undefined") {
+    if (/^\/wenjuan(?:\/|$)/.test(window.location.pathname)) return "/wenjuan";
+    if (/^\/answer-card(?:\/|$)/.test(window.location.pathname)) return "/answer-card";
   }
   return "";
 }
