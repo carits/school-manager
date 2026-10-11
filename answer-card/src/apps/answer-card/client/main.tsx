@@ -41,7 +41,7 @@ const router = createBrowserRouter([
     path: "*",
     element: <App />,
   },
-]);
+], { basename: "/answer-card" });
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

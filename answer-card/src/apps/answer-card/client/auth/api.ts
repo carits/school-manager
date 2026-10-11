@@ -14,7 +14,15 @@ function isScannerBuild(): boolean {
 }
 function getApiBase(): string {
   if (isScannerBuild()) return "";
-  return readServerUrl() || (getViteEnv()?.VITE_PROJECTX_API_BASE ?? "").replace(/\/+$/, "");
+  const configured = readServerUrl() || (getViteEnv()?.VITE_PROJECTX_API_BASE ?? "").replace(/\/+$/, "");
+  if (configured) return configured;
+  // The production web app is mounted below /answer-card/. Keep local
+  // development at the root while making same-origin API calls work through
+  // the Nginx path prefix in production.
+  if (typeof window !== "undefined" && /^\/answer-card(?:\/|$)/.test(window.location.pathname)) {
+    return "/answer-card";
+  }
+  return "";
 }
 
 /**

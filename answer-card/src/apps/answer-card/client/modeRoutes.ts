@@ -20,8 +20,17 @@ export const MODE_PATH: Record<ProjectXAppMode, string> = {
   permissions: "/permissions",
 };
 
+const APP_BASE_PATH = "/answer-card";
+
+function withoutAppBase(pathname: string): string {
+  if (pathname === APP_BASE_PATH || pathname === `${APP_BASE_PATH}/`) return "/";
+  if (pathname.startsWith(`${APP_BASE_PATH}/`)) return pathname.slice(APP_BASE_PATH.length) || "/";
+  return pathname;
+}
+
 /** 由当前 pathname 推断 mode；无法识别时返回 null（调用方回退到 design）。 */
 export function pathToMode(pathname: string): ProjectXAppMode | null {
+  pathname = withoutAppBase(pathname);
   // 根路径直接视作首页，避免首渲染依赖调用方 ?? 兜底产生的冗余状态/闪烁。
   if (pathname === "/" || pathname === "") return "home";
   const entry = (Object.entries(MODE_PATH) as [ProjectXAppMode, string][]).find(

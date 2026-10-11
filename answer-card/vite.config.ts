@@ -25,6 +25,10 @@ export default defineConfig(({ mode }) => {
   const scannerOutDir = path.join(__dirname, "dist", "scanner");
 
   return {
+    // The web service is published below /answer-card/. Keeping the base here
+    // makes Vite emit script, stylesheet, and public asset URLs that survive
+    // the Nginx path prefix instead of falling through to the legacy service.
+    base: isScanner ? "/" : "/answer-card/",
     plugins: [
       react(),
       tailwindcss(),
