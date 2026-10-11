@@ -22,6 +22,12 @@ RUN git clone --depth 1 --branch ${OPENCV_VERSION} https://github.com/opencv/ope
     && cmake --install /tmp/opencv-build \
     && rm -rf /tmp/opencv /tmp/opencv-build
 
+# OpenCV's static export may retain the optional built-in protobuf target even
+# when DNN is excluded from BUILD_LIST; satisfy the exported target check.
+RUN mkdir -p /opt/opencv/lib/opencv4/3rdparty \
+    && test -f /opt/opencv/lib/opencv4/3rdparty/liblibprotobuf.a \
+       || ar rcs /opt/opencv/lib/opencv4/3rdparty/liblibprotobuf.a
+
 COPY native/AnswerCardRecognizer /src/native/AnswerCardRecognizer
 RUN cmake -S /src/native/AnswerCardRecognizer -B /src/native/AnswerCardRecognizer/build \
       -DCMAKE_BUILD_TYPE=Release -DOpenCV_DIR=/opt/opencv/lib/cmake/opencv4 \
