@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+release
+.npm-cache
+.git
+electron
+native/ScannerBridge
+resources/native/win-ia32
+resources/native/win-x64
+scripts/*.bat
+AGENTS.md

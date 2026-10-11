@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#C00F28" />
+    <title>答题卡设计系统</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- 移除 Google Fonts：服务端 CSP style-src 'self' 本就拦截，校园内网也连不上；
+         字体栈自带系统回退（PingFang SC / Microsoft YaHei），不再产生启动期 CSP 报错 -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/apps/answer-card/client/main.tsx"></script>
+  </body>
+</html>

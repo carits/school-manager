@@ -1,0 +1,265 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { fetchJson, getAuthToken, setAuthToken, clearMediaTicketCache } from "./api";
+import { permissionGrants, TEACHER_ROLE_LABELS, type AuthUser, type LoginResponse } from "./types";
+import { ForcedPasswordChange } from "./ForcedPasswordChange";
+
+// ── v1.6.0: 运行时 Persona（视图身份） ──────────────────────
+export type AppPersona = "student" | "teacher" | "teacher-scanner";
+export type TeacherRoleOverride = "subject_teacher" | "head_teacher" | "grade_leader" | null;
+
+const PERSONA_STORAGE_KEY = "projectx_persona";
+const TEACHER_ROLE_OVERRIDE_KEY = "projectx_teacher_role_override";
+
+function loadPersona(): AppPersona | null {
+  try {
+    const v = localStorage.getItem(PERSONA_STORAGE_KEY);
+    if (v === "student" || v === "teacher" || v === "teacher-scanner") {
+      // Web build: teacher-scanner is not a valid persona anymore
+      if (import.meta.env.VITE_BUILD_TARGET !== "scanner" && v === "teacher-scanner") {
+        return null; // Fall back to default
+      }
+      return v;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function savePersona(p: AppPersona): void {
+  try { localStorage.setItem(PERSONA_STORAGE_KEY, p); } catch { /* ignore */ }
+}
+
+function loadTeacherRoleOverride(): TeacherRoleOverride {
+  try {
+    const v = localStorage.getItem(TEACHER_ROLE_OVERRIDE_KEY);
+    if (v === "subject_teacher" || v === "head_teacher" || v === "grade_leader") return v;
+  } catch { /* ignore */ }
+  return null;
+}
+
+function saveTeacherRoleOverride(r: TeacherRoleOverride): void {
+  try {
+    if (r) localStorage.setItem(TEACHER_ROLE_OVERRIDE_KEY, r);
+    else localStorage.removeItem(TEACHER_ROLE_OVERRIDE_KEY);
+  } catch { /* ignore */ }
+}
+
+function defaultPersonaForUser(user: AuthUser): AppPersona {
+  if (user.role_name === "admin") {
+    // Web build: default to teacher persona
+    // Scanner build: always teacher-scanner
+    return loadPersona() ?? (import.meta.env.VITE_BUILD_TARGET === "scanner" ? "teacher-scanner" : "teacher");
+  }
+  if (user.role_name === "student") return "student";
+  // Teacher: default to teacher persona (no scanner in web mode)
+  return loadPersona() ?? "teacher";
+}
+
+function availablePersonasForUser(user: AuthUser): AppPersona[] {
+  if (user.role_name === "admin") {
+    // Web build: admin can switch between teacher and student
+    // Scanner build: admin is always teacher-scanner
+    if (import.meta.env.VITE_BUILD_TARGET === "scanner") {
+      return ["teacher-scanner"];
+    }
+    return ["teacher", "student"];
+  }
+  if (user.role_name === "student") return ["student"];
+  return ["teacher"];
+}
+
+interface AuthContextValue {
+  user: AuthUser | null;
+  loading: boolean;
+  login: (identifier: string, password: string, isPersistent?: boolean) => Promise<string | undefined>;
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
+  /**
+   * 把「已成功写回服务端的字段」合并进本地用户快照（安全 R49）。
+   *
+   * 存在理由：皮肤/主题这类偏好是 fire-and-forget 的 PATCH，成功后本地 `user` 仍停在登录快照。
+   * 于是 A→B→A 的最后一步会被「与登录快照相同就不用回写」的判断跳过，账号最终留在 B——
+   * 重登或换设备恢复出用户并没有选的那个皮肤。写回成功后必须更新权威状态，失败时调用方
+   * 应改用 `refreshUser()` 以服务端为准。
+   */
+  patchUserLocal: (partial: Partial<AuthUser>) => void;
+  hasPermission: (perm: string) => boolean;
+  isAdmin: boolean;
+  isTeacher: boolean;
+  isStudent: boolean;
+  teacherRole: string | null;
+  isSubjectTeacher: boolean;
+  isHeadTeacher: boolean;
+  isGradeLeader: boolean;
+  teacherRoleLabel: string;
+  // ── v1.6.0: 运行时 Persona ──
+  persona: AppPersona;
+  setPersona: (p: AppPersona) => void;
+  teacherRoleOverride: TeacherRoleOverride;
+  setTeacherRoleOverride: (r: TeacherRoleOverride) => void;
+  availablePersonas: AppPersona[];
+  canSwitchPersona: boolean;
+}
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [persona, setPersonaState] = useState<AppPersona>("teacher");
+  const [teacherRoleOverride, setTeacherRoleOverrideState] = useState<TeacherRoleOverride>(null);
+
+  const refreshUser = useCallback(async () => {
+    const token = getAuthToken();
+    try {
+      const me = await fetchJson<AuthUser>("/api/auth/me");
+      setUser(me);
+      setPersonaState(defaultPersonaForUser(me));
+      if (me.role_name === "admin") {
+        setTeacherRoleOverrideState(loadTeacherRoleOverride());
+      }
+    } catch {
+      if (token) setAuthToken(null);
+      setUser(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      await refreshUser();
+      setLoading(false);
+    })();
+  }, [refreshUser]);
+
+  const login = useCallback(async (identifier: string, password: string, isPersistent?: boolean): Promise<string | undefined> => {
+    const result = await fetchJson<LoginResponse>("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier, password, isPersistent: !!isPersistent })
+    });
+    // 安全审计（P1）：同源登录响应不含 token（主通道 = HttpOnly Cookie），
+    // 仅在跨域 API 模式才取得内存 token；不落 localStorage。
+    setAuthToken(result.token ?? null);
+    const nextUser: AuthUser = {
+      ...result.user,
+      // v2.1.0: 登录响应 user 来自 SELECT u.*（snake_case theme_skin），
+      // /api/auth/me 返回 camelCase themeSkin —— 此处统一为 AuthUser.themeSkin
+      themeSkin: (result.user as { theme_skin?: string }).theme_skin,
+      passwordChangeRequired: result.passwordChangeRequired,
+      role_name: result.user.role_name ?? "unknown",
+      permissions: result.permissions ?? result.user.permissions ?? []
+    };
+    setUser(nextUser);
+    setPersonaState(defaultPersonaForUser(nextUser));
+    if (nextUser.role_name === "admin") {
+      setTeacherRoleOverrideState(loadTeacherRoleOverride());
+    }
+    return result.passwordChangeRequired ? "必须先修改一次性密码" : undefined;
+  }, []);
+
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setUser(null);
+      // 会话失效即视为登出：清除「会话内显式皮肤选择」标记，避免下一账号继承
+      try { sessionStorage.removeItem("projectx-skin-chosen"); } catch { /* ignore */ }
+    };
+    window.addEventListener("projectx:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("projectx:unauthorized", onUnauthorized);
+  }, []);
+
+  const logout = useCallback(async () => {
+    try {
+      await fetchJson("/api/auth/logout", { method: "POST" });
+    } catch {
+      // ignore logout errors
+    }
+    setAuthToken(null);
+    setUser(null);
+    // 安全（R30）：服务端登出会作废该用户的全部资源票据，本地票据缓存同步清空，
+    // 否则下一个会话可能拿旧票据拼出注定 401 的 URL。
+    clearMediaTicketCache();
+    // 清除「会话内显式皮肤选择」标记（见 readus/SKIN-THEME.md §二）：
+    // 共享设备上下一账号登录时以账号偏好为准，不继承上一账号的皮肤。
+    try { sessionStorage.removeItem("projectx-skin-chosen"); } catch { /* ignore */ }
+  }, []);
+
+  const hasPermission = useCallback(
+    (perm: string) => {
+      if (!user) return false;
+      return permissionGrants(user.permissions, perm);
+    },
+    [user]
+  );
+
+  const patchUserLocal = useCallback((partial: Partial<AuthUser>) => {
+    setUser((prev) => (prev ? { ...prev, ...partial } : prev));
+  }, []);
+
+  const setPersona = useCallback((p: AppPersona) => {
+    setPersonaState(p);
+    savePersona(p);
+  }, []);
+
+  const setTeacherRoleOverride = useCallback((r: TeacherRoleOverride) => {
+    setTeacherRoleOverrideState(r);
+    saveTeacherRoleOverride(r);
+  }, []);
+
+  const teacherRole = user?.role_name === "teacher" ? (user?.teacher_role ?? null) : null;
+  const availablePersonas = useMemo(
+    () => user ? availablePersonasForUser(user) : [],
+    [user]
+  );
+  const canSwitchPersona = useMemo(
+    // Web mode: admin can switch personas. Scanner mode: persona is fixed.
+    () => user?.role_name === "admin" && import.meta.env.VITE_BUILD_TARGET !== "scanner",
+    [user]
+  );
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      loading,
+      login,
+      logout,
+      refreshUser,
+      patchUserLocal,
+      hasPermission,
+      isAdmin: user?.role_name === "admin",
+      isTeacher: user?.role_name === "teacher",
+      isStudent: user?.role_name === "student",
+      teacherRole,
+      isSubjectTeacher: teacherRole === "subject_teacher",
+      isHeadTeacher: teacherRole === "head_teacher",
+      isGradeLeader: teacherRole === "grade_leader",
+      teacherRoleLabel: teacherRole ? (TEACHER_ROLE_LABELS[teacherRole] ?? "") : "",
+      // ── v1.6.0 ──
+      persona,
+      setPersona,
+      teacherRoleOverride,
+      setTeacherRoleOverride,
+      availablePersonas,
+      canSwitchPersona,
+    }),
+    [user, loading, login, logout, refreshUser, patchUserLocal, hasPermission, teacherRole, persona, setPersona, teacherRoleOverride, setTeacherRoleOverride, availablePersonas, canSwitchPersona]
+  );
+
+  return (
+    <AuthContext.Provider value={value}>
+      {user?.passwordChangeRequired ? (
+        <ForcedPasswordChange
+          username={user.username}
+          onChanged={() => {
+            setAuthToken(null);
+            setUser(null);
+          }}
+        />
+      ) : children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
+  return ctx;
+}

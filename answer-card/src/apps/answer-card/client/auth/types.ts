@@ -1,0 +1,195 @@
+export interface AuthUser {
+  id: number;
+  username: string;
+  name: string;
+  role_id: number;
+  role_name: string;
+  role_display_name?: string;
+  student_number: string | null;
+  teacher_role?: string | null;
+  subject?: string | null;
+  email?: string | null;
+  last_login_at?: string | null;
+  show_tab_bar?: number;          // v1.9.0: 0=隐藏 1=显示
+  themeSkin?: string;             // v2.1.0: 前端皮肤 ID（'flat'=明澈 Flat 2.0）
+  passwordChangeRequired?: boolean;
+  permissions: string[];
+}
+
+export interface LoginResponse {
+  // 安全审计（P1）：同源部署下认证主通道为 HttpOnly Cookie，登录响应不返回 token；
+  // 仅跨域 API 模式（Cookie 无法跨站点携带）才返回一次性 token 供内存使用。因此为可选。
+  token?: string;
+  user: Omit<AuthUser, "permissions"> & { permissions?: string[] };
+  permissions: string[];
+  passwordChangeRequired: boolean;
+  message?: string;
+}
+
+export interface UserListItem {
+  id: number;
+  username: string;
+  name: string;
+  role_id: number;
+  role_name?: string;
+  role_display_name?: string;
+  student_number: string | null;
+  subject: string | null;
+  teacher_role?: string | null;
+  initial_password: string | null;
+  email: string | null;
+  phone: string | null;
+  is_active: number;
+  last_login_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UsersListResponse {
+  users: UserListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  roleSummary: Array<{ role_name: string; display_name: string; count: number }>;
+}
+
+export function roleCount(summary: UsersListResponse["roleSummary"], role: string): number {
+  return summary.find((item) => item.role_name === role)?.count ?? 0;
+}
+
+export interface GradeRecord {
+  id: number;
+  name: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface ClassRecord {
+  id: number;
+  grade_id: number;
+  name: string;
+  sort_order: number;
+  created_at: string;
+  grade_name?: string;
+  student_count?: number;
+}
+
+export interface ClassStudent {
+  student_id: number;
+  username: string;
+  name: string;
+  student_number: string | null;
+  /** 文理分科：arts 文科 / science 理科（Issue #177） */
+  track: string | null;
+  joined_at: string;
+}
+
+export interface StudentExamScore {
+  exam_id: number;
+  exam_name: string;
+  subject: string | null;
+  objective_score: number;
+  subjective_score: number;
+  total_score: number;
+  /** 该场考试满分（后端 getExamFullScoreMap 口径）；无法解析时为 null，不虚构 */
+  full_score: number | null;
+  rank: number | null;
+  percentile: number | null;
+  class_size: number;
+  graded_at: string;
+  /** v54: 1 = 成绩已公布且教师开启「显示原卷」，可进入原卷/逐题答案页 */
+  paper_visible?: number;
+}
+
+export interface StudentQuestionScore {
+  question_number: number | null;
+  question_id: string | null;
+  block_id: string | null;
+  score: number;
+  max_score: number;
+  score_type: string;
+}
+
+export const ROLE_LABELS: Record<string, string> = {
+  admin: "管理员",
+  teacher: "教师",
+  student: "学生"
+};
+
+export const TEACHER_ROLE_LABELS: Record<string, string> = {
+  subject_teacher: "学科老师",
+  head_teacher: "班主任",
+  grade_leader: "学年主任"
+};
+
+export const PERMISSIONS = {
+  CARD_READ: "card:read",
+  CARD_WRITE: "card:write",
+  EXAM_READ: "exam:read",
+  EXAM_WRITE: "exam:write",
+  GRADE_READ: "grade:read",
+  GRADE_WRITE: "grade:write",
+  SCORE_READ: "score:read",
+  USER_MANAGE: "user:manage",
+  CLASS_MANAGE: "class:manage",
+  SYSTEM_MANAGE: "system:manage"
+} as const;
+
+export function permissionGrants(held: string[], required: string): boolean {
+  const set = new Set(held);
+  if (set.has("*")) return true;
+  if (set.has(required)) return true;
+  const domain = required.split(":")[0];
+  return set.has(`${domain}:*`);
+}
+
+// ──────────────────────────────────────────────────────────
+// v1.1: 教师管理 / 学生管理 新增类型
+// ──────────────────────────────────────────────────────────
+
+export interface TeacherRecord {
+  id: number;
+  username: string;
+  name: string;
+  role_id: number;
+  role_name?: string;
+  role_display_name?: string;
+  subject: string | null;
+  teacher_role?: string | null;
+  email: string | null;
+  phone: string | null;
+  created_at: string;
+  classes?: Array<{
+    class_id: number;
+    class_name: string;
+    grade_name: string;
+    subject: string | null;
+  }>;
+}
+
+export interface TeachersListResponse {
+  teachers: TeacherRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface StudentWithClass {
+  student_id: number;
+  username: string;
+  name: string;
+  student_number: string | null;
+  /** 文理分科：arts 文科 / science 理科（Issue #177） */
+  track: string | null;
+  initial_password: string | null;
+  class_id: number;
+  class_name: string;
+  grade_id: number;
+  grade_name: string;
+  joined_at: string;
+}
+
+export interface CsvImportResult {
+  students: { created: number; skipped: number; errors: Array<{ row: string[]; message: string }> };
+  teachers: { created: number; skipped: number; errors: Array<{ row: string[]; message: string }> };
+}
