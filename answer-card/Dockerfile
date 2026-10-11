@@ -26,7 +26,9 @@ RUN git clone --depth 1 --branch ${OPENCV_VERSION} https://github.com/opencv/ope
 # when DNN is excluded from BUILD_LIST; satisfy the exported target check.
 RUN mkdir -p /opt/opencv/lib/opencv4/3rdparty \
     && test -f /opt/opencv/lib/opencv4/3rdparty/liblibprotobuf.a \
-       || ar rcs /opt/opencv/lib/opencv4/3rdparty/liblibprotobuf.a
+       || ar rcs /opt/opencv/lib/opencv4/3rdparty/liblibprotobuf.a \
+    && test -f /opt/opencv/lib/opencv4/3rdparty/libade.a \
+       || ar rcs /opt/opencv/lib/opencv4/3rdparty/libade.a
 
 COPY native/AnswerCardRecognizer /src/native/AnswerCardRecognizer
 RUN cmake -S /src/native/AnswerCardRecognizer -B /src/native/AnswerCardRecognizer/build \
