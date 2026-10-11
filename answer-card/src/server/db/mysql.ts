@@ -455,9 +455,9 @@ export async function initMariadbSchema(): Promise<void> {
   const conn = await pool.getConnection();
   try {
     const statements = schema
-      .split("\n")
-      .filter(line => !line.trim().startsWith("--"))
-      .join("\n")
+      // Remove SQL line comments before splitting on semicolons. Inline
+      // comments can contain semicolons and would otherwise truncate a DDL.
+      .replace(/--[^\r\n]*/g, "")
       .split(";")
       .map(s => s.trim())
       .filter(s => s.length > 0 && !s.startsWith("USE ") && !s.startsWith("CREATE DATABASE"));
