@@ -37,6 +37,7 @@ services:
       PROJECTX_ENABLE_SCANNER: "0"
       PROJECTX_ENABLE_SCANNER_CLIENT_API: "0"
       PROJECTX_AUTH_ENFORCE: "1"
+      PROJECTX_BIND_HOST: "0.0.0.0"
       ANSWER_CARD_DATA_DIR: /app/data/answer-card
       ANSWER_CARD_RECOGNIZER_EXE: /app/resources/native/linux-x64/answer-card-recognizer
       PROJECTX_TRUST_PROXY: "1"

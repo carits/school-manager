@@ -3492,7 +3492,8 @@ export async function startServer(port = Number(process.env.PORT ?? 5174)): Prom
       process.on("SIGTERM", shutdown);
       resolve(server as ProjectXServer);
     });
-    server.listen(port, "127.0.0.1");
+    const bindHost = process.env.PROJECTX_BIND_HOST ?? "127.0.0.1";
+    server.listen(port, bindHost);
   });
 }
 
