@@ -1,3 +1,4 @@
+import { submitExternalScore } from "./externalPaper/review";
 import { databaseTimestamp } from "../db/timestamp";
 import { getMysqlDb, buildUpsertSQL } from "../db";
 import type { DbAdapter } from "../db";
@@ -274,6 +275,9 @@ export async function submitReviewCropScores(params: {
   userId: number;
   /** 题块总分模式（#187）：整个题块的合计分，后端按比例拆分到各小题 */
   blockTotalScore?: number;
+  requestId?: string;
+  claimCount?: number;
+  editRound?: number;
   /** Issue #174: 管理员提交他人已领取试卷时放行（一般由强制释放流程处理） */
   isAdmin?: boolean;
 }, db: DbAdapter = getMysqlDb()): Promise<ReviewSubmitResult> {
@@ -284,6 +288,14 @@ export async function submitReviewCropScores(params: {
   ) as CropRow | undefined;
   if (!crop) throw new Error("作答切块不存在");
   if (!crop.student_id) throw new Error("该切块未关联学生，无法阅卷");
+  if (crop.block_id.startsWith("external_")) {
+    if (params.scores.length !== 1 || params.scores[0].scoreType !== "subjective" || crop.block_id !== `external_${params.examId}_q${params.scores[0].questionNumber}`) {
+      throw new ReviewValidationError("现成答题卡每次只提交当前题目分数");
+    }
+    return submitExternalScore({ examId: params.examId, cropId: params.cropId, userId: params.userId,
+      score: params.blockTotalScore, requestId: params.requestId, claimCount: params.claimCount,
+      editRound: params.editRound, isAdmin: params.isAdmin }, db);
+  }
 
   // Issue #174: 已领取的试卷只能由领取人提交（管理员除外），防止并发冲突覆盖
   if (!params.isAdmin && crop.claimed_by !== params.userId) {

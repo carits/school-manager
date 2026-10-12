@@ -531,7 +531,8 @@ export type ReviewSubmitResult = {
   ok: true;
   cropId: string;
   status: string;
-  totalScore: number;
+  /** null means the sheet still has unresolved questions. */
+  totalScore: number | null;
   disputed?: boolean;
   disputeReason?: string;
   reviewRound?: number;

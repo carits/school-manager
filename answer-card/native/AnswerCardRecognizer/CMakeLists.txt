@@ -12,6 +12,7 @@ find_package(nlohmann_json 3.7 REQUIRED)
 
 add_executable(answer-card-recognizer
   answer-card-recognizer/main.cpp
+  answer-card-recognizer/external_recognition.cpp
   answer-card-recognizer/common.cpp
   answer-card-recognizer/answer_recognition.cpp
   answer-card-recognizer/layout_io.cpp

@@ -1,0 +1,126 @@
+name: External paper verification
+
+on:
+  push:
+    branches: [feat/external-paper-grading-20261012]
+    paths: ['answer-card/**', '.github/workflows/external-paper-ci.yml']
+  pull_request:
+    paths: ['answer-card/**', '.github/workflows/external-paper-ci.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-paper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sqlite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: answer-card/package-lock.json
+      - run: sudo apt-get update -qq && sudo apt-get install -y poppler-utils
+      - name: Typecheck, build, external workflow and existing review regressions
+        working-directory: answer-card
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci 2>&1 | tee install.log
+          npm run typecheck 2>&1 | tee typecheck.log
+          npm run build 2>&1 | tee build.log
+          npm run verify:external-paper 2>&1 | tee external-paper.log
+          npm run verify:permission-scope 2>&1 | tee permission-scope.log
+          npm run verify:review-submit 2>&1 | tee review-submit.log
+          npm run verify:block-total 2>&1 | tee block-total.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: external-paper-sqlite-logs
+          path: answer-card/*.log
+          retention-days: 3
+
+  mariadb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      db:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ci-disposable-root
+          MARIADB_DATABASE: external_paper_ci
+          MARIADB_USER: external_ci
+          MARIADB_PASSWORD: ci-disposable-password
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: answer-card/package-lock.json
+      - run: sudo apt-get update -qq && sudo apt-get install -y poppler-utils
+      - name: Test real MariaDB adapter against disposable database
+        working-directory: answer-card
+        env:
+          EXTERNAL_TEST_MARIADB: '1'
+          PROJECTX_MARIADB_HOST: '127.0.0.1'
+          PROJECTX_MARIADB_PORT: '3306'
+          PROJECTX_MARIADB_DATABASE: external_paper_ci
+          PROJECTX_MARIADB_USER: external_ci
+          PROJECTX_MARIADB_PASSWORD: ci-disposable-password
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci 2>&1 | tee mariadb-install.log
+          npm run verify:external-paper 2>&1 | tee mariadb-external-paper.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: external-paper-mariadb-logs
+          path: answer-card/*.log
+          retention-days: 3
+
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: answer-card/package-lock.json
+      - name: Install native verification dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y libopencv-dev nlohmann-json3-dev poppler-utils pkg-config g++
+      - name: Compile native sources and test rotations, filling and cropped pages
+        working-directory: answer-card
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci 2>&1 | tee native-install.log
+          mkdir -p native-verification
+          # This compatibility build uses Ubuntu's OpenCV. Production CMake keeps OpenCV 4.13.
+          g++ -std=c++20 -O2 native/AnswerCardRecognizer/answer-card-recognizer/*.cpp $(pkg-config --cflags --libs opencv4) -o native-verification/answer-card-recognizer 2>&1 | tee native-build.log
+          ANSWER_CARD_RECOGNIZER_EXE="$PWD/native-verification/answer-card-recognizer" npm run verify:external-native 2>&1 | tee native-tests.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: external-paper-native-logs
+          path: answer-card/*.log
+          retention-days: 3

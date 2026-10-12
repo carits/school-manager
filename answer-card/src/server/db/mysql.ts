@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import mariadb from "mysql2/promise";
 import type { Pool, PoolConnection, RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import { existsSync, readFileSync } from "node:fs";
@@ -163,6 +164,26 @@ class SqliteAdapter implements DbAdapter {
   /** 慢查询阈值 ms（建议 12：先测量再优化，>50ms 记日志定位） */
   private slowThresholdMs = 50;
 
+  // One better-sqlite3 connection cannot host overlapping async transactions.
+  // Operations from the current transaction may run immediately; unrelated
+  // requests wait, so an await for image I/O cannot commit another user's work.
+  private turn: Promise<void> = Promise.resolve();
+  private context = new AsyncLocalStorage<symbol>();
+  private transactionOwner: symbol | undefined;
+  private async exclusive<T>(fn: () => Promise<T> | T): Promise<T> {
+    const previous = this.turn;
+    let release!: () => void;
+    this.turn = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try { return await fn(); } finally { release(); }
+  }
+  private ownsTransaction(): boolean {
+    return this.transactionOwner !== undefined && this.context.getStore() === this.transactionOwner;
+  }
+  private access<T>(fn: () => T): Promise<T> {
+    return this.ownsTransaction() ? Promise.resolve(fn()) : this.exclusive(fn);
+  }
+
   constructor() {
     this.db = getDatabase();
   }
@@ -175,57 +196,39 @@ class SqliteAdapter implements DbAdapter {
   }
 
   async get<T>(sql: string, ...params: any[]): Promise<T | null> {
-    const start = Date.now();
-    const row = this.db.prepare(sql).get(...params) as T | undefined;
-    this.logTiming(sql, Date.now() - start);
-    return row ?? null;
+    return this.access(() => { const start = Date.now(); const row = this.db.prepare(sql).get(...params) as T | undefined; this.logTiming(sql, Date.now() - start); return row ?? null; });
   }
   async all<T>(sql: string, ...params: any[]): Promise<T[]> {
-    const start = Date.now();
-    const rows = this.db.prepare(sql).all(...params) as T[];
-    this.logTiming(sql, Date.now() - start);
-    return rows;
+    return this.access(() => { const start = Date.now(); const rows = this.db.prepare(sql).all(...params) as T[]; this.logTiming(sql, Date.now() - start); return rows; });
   }
   async run(sql: string, ...params: any[]): Promise<{ lastInsertRowid: number; changes: number }> {
-    const start = Date.now();
-    const r = this.db.prepare(sql).run(...params);
-    this.logTiming(sql, Date.now() - start);
-    return { lastInsertRowid: Number(r.lastInsertRowid), changes: r.changes };
+    return this.access(() => { const start = Date.now(); const r = this.db.prepare(sql).run(...params); this.logTiming(sql, Date.now() - start); return { lastInsertRowid: Number(r.lastInsertRowid), changes: r.changes }; });
   }
   async exec(sql: string): Promise<void> {
-    const start = Date.now();
-    this.db.exec(sql);
-    this.logTiming(sql, Date.now() - start);
+    return this.access(() => { const start = Date.now(); this.db.exec(sql); this.logTiming(sql, Date.now() - start); });
   }
-  /**
-   * 事务约束（建议 12）：
-   * 禁止在 `fn` 内做任何真正的异步 I/O（如 await fetch / 外部服务）。
-   * better-sqlite3 是单连接同步驱动，`await fn(this)` 会在 BEGIN/COMMIT 之间让出事件循环；
-   * 若并发事务穿插或外部 await 穿插，会破坏本事务的原子性/隔离性。
-   * 需要长任务的写请先收集 DB 只读数据，再一次性进事务提交。
-   */
+  /** Serialize the complete async transaction, not merely its BEGIN statement. */
   async transaction<T>(fn: (db: DbAdapter) => Promise<T>): Promise<T> {
-    const begin = this.db.prepare("BEGIN");
-    const commit = this.db.prepare("COMMIT");
-    const rollback = this.db.prepare("ROLLBACK");
-    begin.run();
-    try {
-      const result = await fn(this);
-      commit.run();
-      return result;
-    } catch (e) {
-      rollback.run();
-      throw e;
-    }
+    if (this.ownsTransaction()) throw new Error("Nested SQLite transactions are not supported; pass the transaction adapter to repository methods");
+    return this.exclusive(async () => {
+      const owner = Symbol("sqlite-transaction");
+      this.db.prepare("BEGIN IMMEDIATE").run();
+      this.transactionOwner = owner;
+      try {
+        const result = await this.context.run(owner, () => fn(this));
+        this.db.prepare("COMMIT").run();
+        return result;
+      } catch (error) {
+        this.db.prepare("ROLLBACK").run();
+        throw error;
+      } finally { this.transactionOwner = undefined; }
+    });
   }
-
-  /**
-   * SQLite 没有 `GET_LOCK`：本适配器只有一条 better-sqlite3 连接，进程内互斥由调用方
-   * 的串行链保证，跨进程互斥由文件锁保证，因此持锁事务就是普通事务（锁名被忽略）。
-   */
+  /** The single-connection gate supplies process-local locking; BEGIN IMMEDIATE supplies the SQLite writer lock. */
   async transactionWithNamedLock<T>(_lockName: string, _waitMs: number, fn: (tx: DbAdapter) => Promise<T>): Promise<T> {
     return this.transaction(fn);
   }
+
 }
 
 // ── MariaDB Adapter ────────────────────────────────────

@@ -1,3 +1,4 @@
+import { ExternalPaperWorkbench } from "./externalPaper/ExternalPaperWorkbench";
 import React, { useEffect, useState } from "react";
 import { ArrowLeft, ClipboardCheck, Users, AlertCircle, FileSearch, Settings } from "lucide-react";
 import { fetchJson } from "../auth/api";
@@ -9,7 +10,7 @@ import { GradingConfigPage } from "./GradingConfigPage";
 import { Badge, Button, SegmentedControl, Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/v2";
 import { EXAM_MODE_LABELS, type ExamMode, type ExamRecord } from "../../../../shared/types";
 
-type ExamDetailTab = "review" | "assign" | "disputes" | "trace" | "settings";
+type ExamDetailTab = "external" | "review" | "assign" | "disputes" | "trace" | "settings";
 
 interface Props {
   examId: number;
@@ -27,6 +28,7 @@ const tabs: Array<{
   label: string;
   requiresRole: "all" | "grade_leader" | "admin";
 }> = [
+  { key: "external", icon: FileSearch, label: "扫描阅卷", requiresRole: "grade_leader" },
   { key: "review", icon: ClipboardCheck, label: "阅卷", requiresRole: "all" },
   { key: "assign", icon: Users, label: "阅卷分配", requiresRole: "grade_leader" },
   { key: "disputes", icon: AlertCircle, label: "争议管理", requiresRole: "grade_leader" },
@@ -118,6 +120,7 @@ export function ExamDetailPage({
         </TabsList>
 
         {/* Tab 内容 */}
+        {canSee("external") && <TabsContent value="external"><ExternalPaperWorkbench examId={examId} /></TabsContent>}
         {canSee("review") && (
           <TabsContent value="review">
             <BlockSelectPage

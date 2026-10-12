@@ -31,7 +31,7 @@ export function wrapRouter(router: Router): Router {
     const route = (layer as any).route;
     if (route && Array.isArray(route.stack)) {
       for (const sub of route.stack) {
-        if (typeof sub.handle === "function" && !sub.handle.__wrapped) {
+        if (typeof sub.handle === "function" && sub.handle.length !== 4 && !sub.handle.__wrapped) {
           const original = sub.handle;
           sub.handle = asyncHandler(original);
           sub.handle.__wrapped = true;
@@ -42,7 +42,7 @@ export function wrapRouter(router: Router): Router {
       if (handle.stack && Array.isArray(handle.stack)) {
         // 嵌套子路由，递归包裹
         wrapRouter(handle);
-      } else if (!handle.__wrapped) {
+      } else if (handle.length !== 4 && !handle.__wrapped) {
         const original = handle;
         (layer as any).handle = asyncHandler(original);
         (layer as any).handle.__wrapped = true;

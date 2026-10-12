@@ -44,3 +44,7 @@ docker compose -f compose.yml up -d --build
 Nginx 使用 `deploy/nginx-location.conf`，监听本机 `5176`，不会改动学籍系统的 `/xueji/` 路由。
 
 首次启动会创建空数据库和管理员。教师可用 `npm run import:teachers -- teachers.xlsx` 导入，账号密码只在终端输出，不写入仓库。
+
+## 现成答题卡扫描阅卷
+
+网上阅卷考试详情新增「扫描阅卷」入口，支持外部PDF模板、明确配页、填涂识别与教师只打分。部署前需重新编译Linux原生识别器。使用步骤、限制、备份和验收见 [EXTERNAL-PAPER-GRADING.md](docs/EXTERNAL-PAPER-GRADING.md)。

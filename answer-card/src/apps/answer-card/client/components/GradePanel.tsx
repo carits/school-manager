@@ -1,3 +1,4 @@
+import { ScoreOnlyPanel } from "./externalPaper/ScoreOnlyPanel";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, ZoomIn, ZoomOut, RotateCw, RotateCcw, PenLine, Save } from "lucide-react";
 import { fetchJson, mediaUrl } from "../auth/api";
@@ -15,7 +16,11 @@ interface Props {
   onBack: () => void;
 }
 
-export function GradePanel({ examId, blockId, teacherId, onBack }: Props) {
+export function GradePanel(props: Props) {
+  return props.blockId.startsWith(`external_${props.examId}_q`) ? <ScoreOnlyPanel {...props} /> : <LegacyGradePanel {...props} />;
+}
+
+function LegacyGradePanel({ examId, blockId, teacherId, onBack }: Props) {
   const [queue, setQueue] = useState<ReviewBlockCropItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [zoom, setZoom] = useState(1);

@@ -78,7 +78,9 @@
     "verify:grading-published-exam": "tsx scripts/verify-grading-published-exam.ts",
     "native:build:linux": "bash scripts/build-linux-recognizer.sh",
     "seed:admin": "tsx scripts/seed-admin.ts",
-    "import:teachers": "tsx scripts/import-teachers.ts"
+    "import:teachers": "tsx scripts/import-teachers.ts",
+    "verify:external-paper": "tsx scripts/verify-external-paper.ts",
+    "verify:external-native": "tsx scripts/verify-external-native.ts"
   },
   "browserslist": [
     "iOS >= 15",
