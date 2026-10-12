@@ -46,7 +46,18 @@ const questionDefinitions = definitions();
 
 async function ensureLayout(): Promise<void> {
   await mkdir(wenjuanDir, { recursive: true });
-  if (existsSync(layoutFile)) return;
+  const classDigits = () => {
+    const elements: unknown[] = [];
+    const xs = [168, 178, 188, 198];
+    for (let index = 0; index < xs.length; index += 1) for (let digit = 0; digit <= 9; digit += 1) elements.push({ id: `class-digit-${index}-${digit}`, type: "student_digit", digitIndex: index, digit, rect: rect(xs[index], 39 + digit * 3.25, 4, 4) });
+    return elements;
+  };
+  if (existsSync(layoutFile)) {
+    const layout = JSON.parse(await readFile(layoutFile, "utf8")) as { pages?: Array<{ elements?: unknown[] }> };
+    const page = layout.pages?.[0];
+    if (page && !(page.elements ?? []).some((element) => (element as { type?: string }).type === "student_digit")) { page.elements = [...(page.elements ?? []), ...classDigits()]; await writeFile(layoutFile, JSON.stringify(layout), "utf8"); }
+    return;
+  }
   const elements: unknown[] = [];
   let n = 1;
   for (let r = 0; r < subjects.length; r += 1) {
@@ -63,14 +74,14 @@ async function ensureLayout(): Promise<void> {
     n += 1;
   }
   const marker = (role: string, x: number, y: number) => ({ role, rect: rect(x, y, 4, 4) });
-  const layout = { cardId: "wenjuan-chuyi-2026", recognitionInk: "legacy", width: 210, height: 297, pages: [{ pageNumber: 1, width: 210, height: 297, markers: [marker("top-left", 14.4, 9), marker("top-right", 196, 9), marker("middle-left", 14.4, 125), marker("middle-right", 196, 125), marker("bottom-left", 14.4, 242), marker("bottom-right", 196, 242)], elements }] };
+  const layout = { cardId: "wenjuan-chuyi-2026", recognitionInk: "legacy", width: 210, height: 297, pages: [{ pageNumber: 1, width: 210, height: 297, markers: [marker("top-left", 14.4, 9), marker("top-right", 196, 9), marker("middle-left", 14.4, 125), marker("middle-right", 196, 125), marker("bottom-left", 14.4, 242), marker("bottom-right", 196, 242)], elements: [...elements, ...classDigits()] }] };
   await writeFile(layoutFile, JSON.stringify(layout), "utf8");
 }
 
 function emit(batchId: string, event: string, data: unknown): void { for (const fn of listeners.get(batchId) ?? []) fn(event, data); }
 async function manifestPath(id: string): Promise<string> { await mkdir(path.join(batchesDir, id), { recursive: true }); return path.join(batchesDir, id, "manifest.json"); }
 async function readManifest(id: string): Promise<Manifest | null> { const p = path.join(batchesDir, id, "manifest.json"); try { return JSON.parse(await readFile(p, "utf8")) as Manifest; } catch { return null; } }
-async function saveManifest(m: Manifest): Promise<void> { m.updatedAt = new Date().toISOString(); await writeFile(path.join(batchesDir, m.id, "manifest.json"), JSON.stringify(m, null, 2), "utf8"); emit(m.id, "progress", batchView(m)); }
+async function saveManifest(m: Manifest): Promise<void> { m.updatedAt = new Date().toISOString(); const target = path.join(batchesDir, m.id, "manifest.json"); const temp = `${target}.tmp`; await writeFile(temp, JSON.stringify(m, null, 2), "utf8"); await rename(temp, target); emit(m.id, "progress", batchView(m)); }
 function visibleTo(m: Manifest, user: Express.Request["user"]): boolean { return !!user && (m.ownerId === user.id || (m.ownerId == null && user.role_name === "admin")); }
 function batchView(m: Manifest) { return { id: m.id, title: m.title, createdAt: m.createdAt, updatedAt: m.updatedAt, status: m.status, files: m.files.map(({ id, name, pages, processedPages, status, error }) => ({ id, name, pages, processedPages, status, error })), pages: m.pages.map(({ fileId, fileName, page, status, error }) => ({ fileId, fileName, page, status, error })) }; }
 function pageCount(text: string): number { const match = text.match(/^Pages:\s+(\d+)/m); return match ? Number(match[1]) : 0; }
@@ -93,6 +104,8 @@ async function processBatch(batchId: string): Promise<void> {
         const image = `${prefix}-${String(p).padStart(3, "0")}.png`;
         try {
           const result = await recognizeAnswerCard({ identityMode: "legacy", imagePath: image, layoutPath: layoutFile, pageNumber: 1, dpi: 300 });
+          const studentId = result.studentId as { status?: string; value?: string | null } | undefined;
+          if (studentId?.status === "ok" && studentId.value) result.classCode = studentId.value;
           m.pages.push({ fileId: file.id, fileName: file.name, page: p, status: String(result.status ?? "ok"), result });
         } catch (error) {
           m.pages.push({ fileId: file.id, fileName: file.name, page: p, status: "error", error: error instanceof Error ? error.message : String(error) });
@@ -127,20 +140,26 @@ function summaryRows(m: Manifest) {
     const questions = Array.isArray(page.result?.questions) ? page.result?.questions as Array<Record<string, unknown>> : [];
     for (const q of questions) {
       const def = questionDefinitions.find((d) => d.questionNumber === Number(q.questionNumber)); if (!def) continue;
-      const key = `${def.section}|${def.subject ?? "班主任"}|${def.metric}`; const row = counts.get(key) ?? { a: 0, b: 0, c: 0, blank: 0, forms: 0 }; row.forms += 1;
+      const classCode = typeof page.result?.classCode === "string" && /^\d{4}$/.test(page.result.classCode) ? page.result.classCode : "";
+      if (!classCode) continue;
+      const key = `${classCode}|${def.section}|${def.subject ?? "班主任"}|${def.metric}`; const row = counts.get(key) ?? { a: 0, b: 0, c: 0, blank: 0, forms: 0 }; row.forms += 1;
       const selected = Array.isArray(q.selectedOptions) ? q.selectedOptions.map(String) : [];
       if (selected.length === 0) row.blank += 1; else { for (const s of selected) { if (s === "A") row.a += 1; else if (s === "B") row.b += 1; else if (s === "C") row.c += 1; } }
       counts.set(key, row);
     }
   }
-  return [...counts.entries()].map(([key, v]) => { const [section, subject, metric] = key.split("|"); const valid = v.a + v.b + v.c; return { section, subject, metric, A: v.a, B: v.b, C: v.c, blank: v.blank, valid, satisfactionRate: valid ? (v.a + v.b * 0.5) / valid : 0, average: valid ? (v.a * 3 + v.b * 2 + v.c) / valid : 0 }; });
+  return [...counts.entries()].map(([key, v]) => { const [classCode, section, subject, metric] = key.split("|"); const valid = v.a + v.b + v.c; return { 班级: classCode, section, subject, metric, A: v.a, B: v.b, C: v.c, blank: v.blank, valid, satisfactionRate: valid ? (v.a + v.b * 0.5) / valid : 0, average: valid ? (v.a * 3 + v.b * 2 + v.c) / valid : 0 }; });
 }
 
 function exportWorkbook(m: Manifest): Buffer {
   const wb = XLSX.utils.book_new(); const rows = summaryRows(m);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ 批次: m.title, 状态: m.status, 文件数: m.files.length, 页面数: m.pages.length, 生成时间: new Date().toLocaleString("zh-CN") }]), "汇总");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "评价统计");
-  const detail = m.pages.map((p) => { const qs = Array.isArray(p.result?.questions) ? p.result?.questions as Array<Record<string, unknown>> : []; const values: Record<string, unknown> = { 文件: p.fileName, 页码: p.page, 状态: p.status, 识别消息: p.result?.message ?? p.error ?? "" }; for (const q of qs) values[`第${q.questionNumber}题`] = Array.isArray(q.selectedOptions) ? (q.selectedOptions as unknown[]).join("/") : ""; return values; });
+  const classTotals = new Map<string, { A: number; B: number; C: number; blank: number; valid: number }>();
+  for (const row of rows) { const item = classTotals.get(row.班级) ?? { A: 0, B: 0, C: 0, blank: 0, valid: 0 }; item.A += row.A; item.B += row.B; item.C += row.C; item.blank += row.blank; item.valid += row.valid; classTotals.set(row.班级, item); }
+  const classRows = [...classTotals.entries()].map(([班级, value]) => ({ 班级, ...value, satisfactionRate: value.valid ? (value.A + value.B * 0.5) / value.valid : 0, average: value.valid ? (value.A * 3 + value.B * 2 + value.C) / value.valid : 0 }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(classRows), "班级汇总");
+  const detail = m.pages.map((p) => { const qs = Array.isArray(p.result?.questions) ? p.result?.questions as Array<Record<string, unknown>> : []; const values: Record<string, unknown> = { 班级: p.result?.classCode ?? "未识别班级", 文件: p.fileName, 页码: p.page, 状态: p.status, 识别消息: p.result?.message ?? p.error ?? "" }; for (const q of qs) values[`第${q.questionNumber}题`] = Array.isArray(q.selectedOptions) ? (q.selectedOptions as unknown[]).join("/") : ""; return values; });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), "问卷明细");
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }
