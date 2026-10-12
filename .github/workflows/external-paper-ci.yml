@@ -1,0 +1,47 @@
+name: External paper verification
+
+on:
+  push:
+    branches: [feat/external-paper-grading-20261012]
+    paths:
+      - 'answer-card/**'
+      - '.github/workflows/external-paper-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-paper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Archive only the answer-card source for verification
+        run: git archive --format=tar --output=answer-card-source.tar HEAD answer-card
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: answer-card-source
+          path: answer-card-source.tar
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: answer-card/package-lock.json
+      - name: Install dependencies
+        working-directory: answer-card
+        run: npm ci
+      - name: Typecheck
+        working-directory: answer-card
+        run: npm run typecheck
+      - name: Build
+        working-directory: answer-card
+        run: npm run build
