@@ -810,9 +810,15 @@ json recognize_objective_answers(
                 const double reprojection_cost = orientation_errors.empty()
                     ? 100.0
                     : std::accumulate(orientation_errors.begin(), orientation_errors.end(), 0.0) / orientation_errors.size();
+                // 旋转候选必须保持与答题卡版式相同的宽高比。这样扫描 PDF 即使被旋转
+                // 90/180/270 度，也会先选到正确方向，再用定位点做透视校正；错误的
+                // 方向候选通常会把文字误当作定位点，导致整页被拉伸并触发识别超时。
+                const double layout_aspect = layout_page.width_mm / layout_page.height_mm;
+                const double candidate_aspect = static_cast<double>(candidate_image.cols) / static_cast<double>(candidate_image.rows);
+                const double aspect_penalty = std::abs(std::log(std::max(1e-9, candidate_aspect / layout_aspect))) * 1000.0;
                 const double score =
                     static_cast<double>(REQUIRED_MARKER_ROLES.size() - orientation_matches.size()) * 1000.0 +
-                    marker_cost * 10.0 + reprojection_cost;
+                    marker_cost * 10.0 + reprojection_cost + aspect_penalty;
                 if (score < best_score) {
                     best_score = score;
                     found_orientation = true;
