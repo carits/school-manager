@@ -3,7 +3,9 @@ name: External paper verification
 on:
   push:
     branches: [feat/external-paper-grading-20261012]
-    paths: ['answer-card/**', '.github/workflows/external-paper-ci.yml', '.github/external-paper-transport/**']
+    paths: ['answer-card/**', '.github/workflows/external-paper-ci.yml']
+  pull_request:
+    paths: ['answer-card/**', '.github/workflows/external-paper-ci.yml']
   workflow_dispatch:
 
 permissions:
@@ -11,51 +13,15 @@ permissions:
 
 concurrency:
   group: external-paper-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  materialize:
-    if: github.ref == 'refs/heads/feat/external-paper-grading-20261012'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    outputs:
-      sha: ${{ steps.apply.outputs.sha }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - id: apply
-        name: Apply checksum-verified implementation to feature branch only
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF" = refs/heads/feat/external-paper-grading-20261012
-          if test -d .github/external-paper-transport; then
-            cat .github/external-paper-transport/{0,1,2,3}.xzpart > /tmp/external-paper.patch.xz
-            echo '90303da7d4fd56fe1de54b88eba01dbbe855b551f17082528d8f1e5774da0695  /tmp/external-paper.patch.xz' | sha256sum -c -
-            xz -dc /tmp/external-paper.patch.xz > /tmp/external-paper.patch
-            echo '4b8cf3ed0ea0c2a09612cae4b4550bd5c63d79bdd4b45810391aa2e42f1810f0  /tmp/external-paper.patch' | sha256sum -c -
-            git apply --numstat /tmp/external-paper.patch | awk -F '\t' '$3 !~ /^answer-card\// {bad=1} END {exit bad}'
-            git apply --check /tmp/external-paper.patch
-            git apply /tmp/external-paper.patch
-            git add answer-card
-            git add -f answer-card/docs/EXTERNAL-PAPER-GRADING.md
-            git rm -r .github/external-paper-transport
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'feat(answer-card): support external scanned PDFs and score-only teacher grading'
-            git push origin HEAD:refs/heads/feat/external-paper-grading-20261012
-          fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
   sqlite:
-    needs: materialize
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ needs.materialize.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -83,7 +49,6 @@ jobs:
           retention-days: 3
 
   mariadb:
-    needs: materialize
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
@@ -101,7 +66,6 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ needs.materialize.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -131,13 +95,11 @@ jobs:
           retention-days: 3
 
   native:
-    needs: materialize
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ needs.materialize.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -146,22 +108,19 @@ jobs:
           cache-dependency-path: answer-card/package-lock.json
       - name: Install native verification dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y libopencv-dev nlohmann-json3-dev poppler-utils pkg-config g++
-      - name: Compile all native sources and run synthetic scan tests
+      - name: Compile native sources and test rotations, filling and cropped pages
         working-directory: answer-card
         shell: bash
         run: |
           set -euo pipefail
           npm ci 2>&1 | tee native-install.log
-          mkdir -p native-verification/lib
+          mkdir -p native-verification
+          # This compatibility build uses Ubuntu's OpenCV. Production CMake keeps OpenCV 4.13.
           g++ -std=c++20 -O2 native/AnswerCardRecognizer/answer-card-recognizer/*.cpp $(pkg-config --cflags --libs opencv4) -o native-verification/answer-card-recognizer 2>&1 | tee native-build.log
-          ldd native-verification/answer-card-recognizer | awk '/=> \// {print $3}' | grep -Ev '/lib(c|m|pthread|dl|rt)\.so\.' | while read -r library; do cp -L "$library" native-verification/lib/; done
-          tar -czf native-verification.tar.gz native-verification
           ANSWER_CARD_RECOGNIZER_EXE="$PWD/native-verification/answer-card-recognizer" npm run verify:external-native 2>&1 | tee native-tests.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: external-paper-native-verification
-          path: |
-            answer-card/native-verification.tar.gz
-            answer-card/*.log
-          retention-days: 1
+          name: external-paper-native-logs
+          path: answer-card/*.log
+          retention-days: 3
