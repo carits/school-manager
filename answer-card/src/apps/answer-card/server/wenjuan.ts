@@ -48,14 +48,14 @@ async function ensureLayout(): Promise<void> {
   await mkdir(wenjuanDir, { recursive: true });
   const classDigits = () => {
     const elements: unknown[] = [];
-    const xs = [168, 178, 188, 198];
-    for (let index = 0; index < xs.length; index += 1) for (let digit = 0; digit <= 9; digit += 1) elements.push({ id: `class-digit-${index}-${digit}`, type: "student_digit", digitIndex: index, digit, rect: rect(xs[index], 39 + digit * 3.25, 4, 4) });
+    const xs = [158.5, 164.2, 169.4, 174.8];
+    for (let index = 0; index < xs.length; index += 1) for (let digit = 0; digit <= 9; digit += 1) elements.push({ id: `class-digit-${index}-${digit}`, type: "student_digit", digitIndex: index, digit, rect: rect(xs[index], 194.3 + digit * 3.45, 3.8, 3) });
     return elements;
   };
   if (existsSync(layoutFile)) {
     const layout = JSON.parse(await readFile(layoutFile, "utf8")) as { pages?: Array<{ elements?: unknown[] }> };
     const page = layout.pages?.[0];
-    if (page && !(page.elements ?? []).some((element) => (element as { type?: string }).type === "student_digit")) { page.elements = [...(page.elements ?? []), ...classDigits()]; await writeFile(layoutFile, JSON.stringify(layout), "utf8"); }
+    if (page) { page.elements = [...(page.elements ?? []).filter((element) => (element as { type?: string }).type !== "student_digit"), ...classDigits()]; await writeFile(layoutFile, JSON.stringify(layout), "utf8"); }
     return;
   }
   const elements: unknown[] = [];

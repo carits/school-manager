@@ -18,12 +18,29 @@ export default function WenjuanApp() {
 
   useEffect(() => {
     if (!user) return;
-    void fetchJson<{ batches: Batch[] }>(`${base}/batches`).then(({ batches: serverBatches }) => {
-      setBatches(serverBatches);
-      const remembered = window.localStorage.getItem(`wenjuan:lastBatch:${user.id}`);
-      const restored = serverBatches.find((item) => item.id === remembered) ?? serverBatches[0] ?? null;
-      if (restored) { setBatch(restored); window.localStorage.setItem(`wenjuan:lastBatch:${user.id}`, restored.id); }
-    }).catch(() => undefined);
+    const userId = user.id;
+    let cancelled = false;
+    async function loadBatches() {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
+        try {
+          const { batches: serverBatches } = await fetchJson<{ batches: Batch[] }>(`${base}/batches`);
+          if (cancelled) return;
+          setBatches(serverBatches);
+          const remembered = window.localStorage.getItem(`wenjuan:lastBatch:${userId}`);
+          const restored = serverBatches.find((item) => item.id === remembered) ?? serverBatches[0] ?? null;
+          if (restored) { setBatch(restored); window.localStorage.setItem(`wenjuan:lastBatch:${userId}`, restored.id); }
+          setMessage("");
+          return;
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => window.setTimeout(resolve, 1200 * (attempt + 1)));
+        }
+      }
+      if (!cancelled) setMessage(lastError instanceof Error ? `批次列表加载失败：${lastError.message}，请刷新重试` : "批次列表加载失败，请刷新重试");
+    }
+    void loadBatches();
+    return () => { cancelled = true; };
   }, [base, user?.id]);
 
   useEffect(() => {
