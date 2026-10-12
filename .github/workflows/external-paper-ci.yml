@@ -33,12 +33,20 @@ jobs:
           if-no-files-found: error
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '22'
+          node-version: '22.16.0'
           cache: npm
           cache-dependency-path: answer-card/package-lock.json
       - name: Install dependencies
         working-directory: answer-card
         run: npm ci
+      - name: Package dependencies for offline verification
+        run: tar -cf answer-card-dependencies.tar -C answer-card node_modules
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: answer-card-dependencies
+          path: answer-card-dependencies.tar
+          retention-days: 1
+          if-no-files-found: error
       - name: Typecheck
         working-directory: answer-card
         run: npm run typecheck
