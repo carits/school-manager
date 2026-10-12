@@ -1,5 +1,6 @@
 #include "answer_recognition.hpp"
 #include "common.hpp"
+#include "external_recognition.hpp"
 #include "recognizer_limits.hpp"
 
 #include <cstdio>
@@ -29,6 +30,7 @@ struct CliOptions {
     int dpi = 300;
     bool debug = false;
     bool legacy = false;
+    bool external = false;
 };
 
 void configure_utf8_output() {
@@ -55,7 +57,9 @@ CliOptions parse_args(int argc, char* argv[]) {
             return argv[index];
         };
 
-        if (name == "--image") {
+        if (name == "--external") {
+            options.external = true;
+        } else if (name == "--image") {
             options.image_path = std::filesystem::path(require_value(name));
         } else if (name == "--layout") {
             options.layout_path = std::filesystem::path(require_value(name));
@@ -114,7 +118,9 @@ int main(int argc, char* argv[]) {
         // stdout 只留给 JSON 结果，生效档位写 stderr：现场排查「为什么这张图被拒」时不用猜默认值
         std::fprintf(stderr, "[recognizer-limits] %s\n", describe_recognizer_limits().c_str());
         const CliOptions options = parse_args(argc, argv);
-        const nlohmann::json result = recognize_objective_answers(
+        const nlohmann::json result = options.external
+            ? recognize_external_paper(options.image_path, options.layout_path, options.crops_dir)
+            : recognize_objective_answers(
             options.image_path,
             options.layout_path,
             options.page,

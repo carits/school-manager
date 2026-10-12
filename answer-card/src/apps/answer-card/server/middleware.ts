@@ -797,6 +797,7 @@ export async function canGradeBlock(
     examId, blockId, teacherId
   );
   if (assigned) return true;
+  if (await db.get("SELECT 1 FROM external_paper_exams WHERE exam_id=?", examId)) return false;
   // v37: 细粒度权限授予 —— 作为追加放行路径（绝不引入新拒绝，确保既有部署零回归）。
   // 匹配规则：can_grade=1 且 (grade_id 为空或匹配考试年级) 且 (block_id 为空或匹配)
   // 且 (subject 为空或匹配考试学科) 且 (class_id 为空或匹配考试班级)。
@@ -850,6 +851,7 @@ export async function getPermittedBlocks(
     examId, teacherId
   );
   const blocks = new Set(assignedRows.map((r) => r.block_id));
+  if (await db.get("SELECT 1 FROM external_paper_exams WHERE exam_id=?", examId)) return [...blocks];
 
   // 2) 细粒度权限授予（block_id 非空的行给出具体题块；NULL 表示该维度不限 → 全部）
   // 维度匹配含 grade_id：grade 为空（不限）或等于考试年级，防止跨年级越权。

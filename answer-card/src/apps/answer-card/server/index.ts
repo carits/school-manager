@@ -1,3 +1,7 @@
+import { externalPaperLegacyGuard } from "../../../server/services/externalPaper/legacyGuard";
+import externalPaperRoutes from "../../../server/routes/external-paper";
+import { ensureExternalPaperSchema } from "../../../server/services/externalPaper/schema";
+import { startExternalPaperWorker } from "../../../server/services/externalPaper/worker";
 import { databaseTimestamp } from "../../../server/db/timestamp";
 import express from "express";
 import multer from "multer";
@@ -784,6 +788,7 @@ export async function createApp(): Promise<express.Express> {
   // 确保连接池在使用前已创建（MariaDB 模式下 initMariadbSchema / ensureDefaultAdmin 依赖）
   getMysqlDb();
   await initMariadbSchema();
+  await ensureExternalPaperSchema(getMysqlDb());
   // 安全审计（F-2）：迁移历史明文 initial_password 为加密存储（幂等）
   await encryptLegacyInitialPasswords(getMysqlDb());
   // 安全审计（P1）：迁移历史明文 api_keys 为 SHA-256 哈希存储（幂等），
@@ -933,6 +938,7 @@ export async function createApp(): Promise<express.Express> {
   app.use("/api/auth", authRoutes);
   // 强制改密账号的自助认证端点已在上方处理；其它 API 一律拒绝。
   app.use("/api", requirePasswordChangeCompleted);
+  app.use("/api", externalPaperLegacyGuard);
 
   // ── 用户自身设置（无需管理员权限） ──
   // GET  /api/users/me/settings — 读取当前用户设置
@@ -1191,6 +1197,14 @@ export async function createApp(): Promise<express.Express> {
   const scannerAuth = makeScannerAuth(enforceAuth);
   const cropGate = answerBlockCropGate(enforceAuth);
   app.use("/api/cards", cardGate);
+  app.use("/api/cards/:cardId", async (req, res, next) => {
+    const external = await getMysqlDb().get("SELECT 1 FROM external_paper_exams WHERE card_id=?", String(req.params.cardId));
+    if (external && (req.method !== "GET" && req.method !== "HEAD" || /\/(pdf|layout|export)(?:\/|$)/.test(req.path))) {
+      res.status(409).json({ message: "现成答题卡请使用考试中的扫描阅卷入口，不可重新排版或按旧模板识别" }); return;
+    }
+    next();
+  });
+
   app.use("/api/exams", examGate);
   // v54: 考试级「本次正确答案」配置（挂在 examGate 之后，继承 EXAM_READ/EXAM_WRITE 再叠加数据范围校验）
   app.use(examAnswerKeyRoutes());
@@ -1203,6 +1217,7 @@ export async function createApp(): Promise<express.Express> {
   app.use("/api/review-annotations", analysisGate, reviewAnnotationsRoutes);
   app.use("/api/block-grading-config", analysisGate, blockGradingConfigRoutes);
   app.use("/api/review-pool", analysisGate, reviewPoolRoutes);
+  app.use("/api/external-paper", externalPaperRoutes);
   app.use("/api/system-settings", systemSettingsRoutes);
   app.use("/api/dashboard", dashboardRoutes);
   app.use("/api/weekly-audit", weeklyAuditRoutes);
@@ -3007,7 +3022,8 @@ export async function createApp(): Promise<express.Express> {
       await assertScoresPublishable(db, exam);
       // 状态更新与审计日志在同一事务中保证原子性；
       // WHERE 带状态条件，防止校验与写入之间考试被并发改回阅卷中（TOCTOU）
-      await db.transaction(async (tx) => {
+      await db.transactionWithNamedLock(`external-exam-${examId}`, 10000, async (tx) => {
+        await assertScoresPublishable(tx, exam);
         const result = await tx.run(
           "UPDATE exams SET score_published = 1, show_original_paper = COALESCE(?, show_original_paper), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('grading', 'closed') AND (score_published IS NULL OR score_published <> 1)",
           showOriginalPaper, examId
@@ -3090,6 +3106,8 @@ export async function createApp(): Promise<express.Express> {
         res.status(409).json({ message: `以下考试尚未进入阅卷阶段，无法公布成绩: ${notPublishable.join(", ")}` });
         return;
       }
+      const externalInBatch = await db.get(`SELECT 1 FROM external_paper_exams WHERE exam_id IN (${examIds.map(() => "?").join(",")}) LIMIT 1`, ...examIds);
+      if (externalInBatch) { res.status(409).json({ message: "现成答题卡考试请逐场公布，以完成整卷及扫描完整性检查" }); return; }
       // 幂等：跳过已公布的考试，不重复写审计事件
       const toPublish = existing
         .filter((item) => item.score_published !== 1)
@@ -3463,6 +3481,9 @@ export async function startServer(port = Number(process.env.PORT ?? 5174)): Prom
   return new Promise((resolve, reject) => {
     const server = createServer(app);
     server.once("error", reject);
+    const stopExternalWorker = startExternalPaperWorker();
+    server.once("close", stopExternalWorker);
+    server.once("error", stopExternalWorker);
     server.once("listening", () => {
       const address = server.address();
       const actualPort = typeof address === "object" && address ? address.port : port;

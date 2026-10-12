@@ -970,3 +970,64 @@ CREATE TABLE IF NOT EXISTS exam_answer_key_pages (
     UNIQUE KEY uq_exam_answer_key_pages (exam_id, page_index),
     FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- External PDF grading: immutable template, durable page jobs and explicit ownership.
+CREATE TABLE IF NOT EXISTS external_paper_exams (
+  exam_id INTEGER PRIMARY KEY,
+  card_id VARCHAR(128) NOT NULL UNIQUE,
+  template_hash VARCHAR(64) NOT NULL,
+  template_json LONGTEXT NOT NULL,
+  answer_key_json LONGTEXT NOT NULL,
+  assignments_json LONGTEXT NOT NULL,
+  created_by INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS external_paper_batches (
+  id VARCHAR(64) PRIMARY KEY,
+  exam_id INTEGER NOT NULL,
+  file_hash VARCHAR(64) NOT NULL,
+  template_hash VARCHAR(64) NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  source_path TEXT NOT NULL,
+  status VARCHAR(24) NOT NULL DEFAULT 'queued',
+  page_count INTEGER NOT NULL,
+  finished INTEGER NOT NULL DEFAULT 0,
+  lease_until BIGINT NOT NULL DEFAULT 0,
+  worker_token VARCHAR(64),
+  error_text TEXT,
+  created_by INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(exam_id, file_hash)
+);
+CREATE TABLE IF NOT EXISTS external_paper_pages (
+  id VARCHAR(64) PRIMARY KEY,
+  batch_id VARCHAR(64) NOT NULL,
+  page_index INTEGER NOT NULL,
+  result_json LONGTEXT NOT NULL,
+  paper_id VARCHAR(64),
+  UNIQUE(batch_id, page_index)
+);
+CREATE TABLE IF NOT EXISTS external_paper_sheets (
+  id VARCHAR(64) PRIMARY KEY,
+  exam_id INTEGER NOT NULL,
+  batch_id VARCHAR(64) NOT NULL,
+  student_id INTEGER NOT NULL,
+  student_number VARCHAR(64) NOT NULL,
+  page_ids_json TEXT NOT NULL,
+  observations_json LONGTEXT NOT NULL,
+  scan_record_id INTEGER NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  confirmed_by INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(exam_id, student_id)
+);
+CREATE TABLE IF NOT EXISTS external_paper_requests (
+  exam_id INTEGER NOT NULL,
+  id VARCHAR(64) NOT NULL,
+  crop_id VARCHAR(64) NOT NULL,
+  actor_id INTEGER NOT NULL,
+  payload_hash VARCHAR(64) NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(exam_id, id)
+);

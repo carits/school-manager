@@ -62,6 +62,12 @@ export async function getAssignedStudentIdSet(
      LIMIT 1`,
     examId, blockId, teacherId
   );
+  if (blockId.startsWith("external_")) {
+    try {
+      const ids: unknown = JSON.parse(row?.assigned_student_ids ?? "null");
+      return new Set(Array.isArray(ids) ? ids.filter((n): n is number => Number.isSafeInteger(n) && n > 0) : []);
+    } catch { return new Set(); }
+  }
   if (!row) return null;
   const raw = row.assigned_student_ids;
   if (!raw) return null;
@@ -109,12 +115,12 @@ function isPostFirstRound(crop: { status?: string | null; reviewRound?: number |
  * 逐生约束（整块可阅）。
  */
 export function isClaimableForAssignedSet(
-  crop: { studentId?: number | null; status?: string | null; reviewRound?: number | null },
+  crop: { studentId?: number | null; status?: string | null; reviewRound?: number | null; blockId?: string },
   assignedIds: Set<number> | null
 ): boolean {
   if (!assignedIds) return true;
   if (assignedIds.has(Number(crop.studentId))) return true;
-  return isPostFirstRound(crop);
+  return crop.blockId?.startsWith("external_") ? false : isPostFirstRound(crop);
 }
 
 /** SQL 版「离开首评队列」判定，与 `isPostFirstRound` 同口径（领取候选在库里就要收敛，不能整块捞回内存） */
@@ -164,7 +170,7 @@ export async function buildAssignedSliceClause(
     const ids = Array.from(assigned);
     const inList = ids.length > 0 ? `abc.student_id IN (${ids.map(() => "?").join(",")})` : "0";
     parts.push({
-      sql: `(abc.block_id = ? AND (${inList} OR ${POST_FIRST_ROUND_ALIASED} OR abc.claimed_by = ?))`,
+      sql: `(abc.block_id = ? AND (${inList} OR ${blockId.startsWith("external_") ? "0" : POST_FIRST_ROUND_ALIASED} OR abc.claimed_by = ?))`,
       params: [blockId, ...ids, teacherId]
     });
   }
@@ -394,7 +400,7 @@ export async function claimNextPaper(
   options: { classId?: number; privileged?: boolean } = {}
 ): Promise<ReviewPoolEntry> {
   const privileged = options.privileged === true;
-  const assignedIds = await getAssignedStudentIdSet(examId, blockId, teacherId, db);
+  const assignedIds = privileged && blockId.startsWith("external_") ? null : await getAssignedStudentIdSet(examId, blockId, teacherId, db);
   const cropId = await db.transaction(async (tx) => withClaimReservation(tx, teacherId, privileged, async () => {
     // 安全 R15 + PR #312 CR9：持有量在领取临界区内结算，「先查后写」分离时并发能突破配额
     await assertHeldQuota(examId, blockId, teacherId, tx, privileged);
@@ -409,8 +415,8 @@ export async function claimNextPaper(
       : "";
     const assignedFilter = assignedIds
       ? inSliceSql
-        ? `AND (${postFirstRoundSqlClause()} OR ${inSliceSql})`
-        : `AND ${postFirstRoundSqlClause()}`
+        ? `AND (${blockId.startsWith("external_") ? "0" : postFirstRoundSqlClause()} OR ${inSliceSql})`
+        : `AND ${blockId.startsWith("external_") ? "0" : postFirstRoundSqlClause()}`
       : "";
     const assignedParams = assignedIds ? [...assignedIds] : [];
     // 切片内的卷子优先：否则他人「已首评待二评」的卷子会按学号排在前头，
@@ -462,7 +468,7 @@ export async function claimSpecificPaper(
   await db.transaction(async (tx) => withClaimReservation(tx, teacherId, privileged, async () => {
     // 安全 R15：持有量上限 + 逐生分配范围（指定 crop 时越权要显式拒绝，而非静默领到别人的卷子）
     await assertHeldQuota(examId, blockId, teacherId, tx, privileged);
-    const assignedIds = await getAssignedStudentIdSet(examId, blockId, teacherId, tx);
+    const assignedIds = privileged && blockId.startsWith("external_") ? null : await getAssignedStudentIdSet(examId, blockId, teacherId, tx);
     const existing = await tx.get<{
       score_breakdown: string | null;
       student_id: number | null;
@@ -483,7 +489,7 @@ export async function claimSpecificPaper(
     }
     // PR #312 CR1：待复核卷子跨切片可领，范围判定与自动领取共用同一谓词，两条路径不会走出两套规则
     if (existing && !isClaimableForAssignedSet(
-      { studentId: existing.student_id, status: existing.status, reviewRound: existing.review_round },
+      { studentId: existing.student_id, status: existing.status, reviewRound: existing.review_round, blockId },
       assignedIds
     )) {
       throw new ReviewPoolScopeError("该试卷不在你的逐生分配范围内，请改用题块内的自动领取");

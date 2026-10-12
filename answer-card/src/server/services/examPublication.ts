@@ -1,3 +1,4 @@
+import { assertExternalScoresComplete } from "./externalPaper/core";
 import type { DbAdapter } from "../db";
 import { ApiError } from "../api-error";
 import { ensureExamParticipants, listMissingParticipants } from "./examParticipants";
@@ -46,6 +47,7 @@ export async function assertScoresPublishable(db: DbAdapter, exam: { id: number 
     );
   }
 
+  await assertExternalScoresComplete(db, exam.id);
   const missing = await listMissingParticipants(db, exam.id);
   if (missing.length > 0) {
     // 安全（PR #312 评审 B6，与 CR12 同一口径）：错误消息**只给人数，不给姓名/学号**。
