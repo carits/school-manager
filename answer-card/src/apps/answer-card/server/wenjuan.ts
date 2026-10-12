@@ -3,11 +3,11 @@ import multer from "multer";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as XLSX from "xlsx";
-import { dataDir, rootDir } from "./storage";
+import { dataDir } from "./storage";
 import { recognizeAnswerCard } from "./recognition";
 
 const execFileAsync = promisify(execFile);
@@ -30,16 +30,16 @@ const classYs = [642.4618, 651.5818, 660.5818].map(pt);
 
 type Rect = { x: number; y: number; width: number; height: number };
 type Definition = { questionNumber: number; section: string; subject?: string; metric: string; option: string; kind: "rating" | "choice" | "class" };
-type Manifest = { id: string; title: string; createdAt: string; status: string; files: Array<{ id: string; name: string; path: string; pages?: number; processedPages?: number; status: string; error?: string }>; pages: Array<{ fileId: string; fileName: string; page: number; status: string; result?: Record<string, unknown>; error?: string }>; updatedAt: string };
+type Manifest = { id: string; ownerId?: number; title: string; createdAt: string; status: string; files: Array<{ id: string; name: string; path: string; pages?: number; processedPages?: number; status: string; error?: string }>; pages: Array<{ fileId: string; fileName: string; page: number; status: string; result?: Record<string, unknown>; error?: string }>; updatedAt: string };
 
 function rect(x: number, y: number, width = 5, height = 3.4): Rect { return { x: x - width / 2, y: y - height / 2, width, height }; }
 
 function definitions(): Definition[] {
   const out: Definition[] = [];
   let n = 1;
-  for (let r = 0; r < subjects.length; r += 1) for (let c = 0; c < metrics.length; c += 1) for (const option of letters) out.push({ questionNumber: n++, section: "任课教师", subject: subjects[r], metric: metrics[c], option, kind: "rating" });
+  for (let r = 0; r < subjects.length; r += 1) for (let c = 0; c < metrics.length; c += 1) { for (const option of letters) out.push({ questionNumber: n, section: "任课教师", subject: subjects[r], metric: metrics[c], option, kind: "rating" }); n += 1; }
   for (let r = 0; r < subjects.length; r += 1) for (const metric of ["有趣课堂", "有得课堂"]) out.push({ questionNumber: n++, section: "课堂选择", subject: subjects[r], metric, option: "A", kind: "choice" });
-  for (const metric of classMetrics) for (const option of letters) out.push({ questionNumber: n++, section: "班主任", metric, option, kind: "class" });
+  for (const metric of classMetrics) { for (const option of letters) out.push({ questionNumber: n, section: "班主任", metric, option, kind: "class" }); n += 1; }
   return out;
 }
 const questionDefinitions = definitions();
@@ -70,12 +70,15 @@ async function ensureLayout(): Promise<void> {
 function emit(batchId: string, event: string, data: unknown): void { for (const fn of listeners.get(batchId) ?? []) fn(event, data); }
 async function manifestPath(id: string): Promise<string> { await mkdir(path.join(batchesDir, id), { recursive: true }); return path.join(batchesDir, id, "manifest.json"); }
 async function readManifest(id: string): Promise<Manifest | null> { const p = path.join(batchesDir, id, "manifest.json"); try { return JSON.parse(await readFile(p, "utf8")) as Manifest; } catch { return null; } }
-async function saveManifest(m: Manifest): Promise<void> { m.updatedAt = new Date().toISOString(); await writeFile(path.join(batchesDir, m.id, "manifest.json"), JSON.stringify(m, null, 2), "utf8"); emit(m.id, "progress", m); }
+async function saveManifest(m: Manifest): Promise<void> { m.updatedAt = new Date().toISOString(); await writeFile(path.join(batchesDir, m.id, "manifest.json"), JSON.stringify(m, null, 2), "utf8"); emit(m.id, "progress", batchView(m)); }
+function visibleTo(m: Manifest, user: Express.Request["user"]): boolean { return !!user && (m.ownerId === user.id || (m.ownerId == null && user.role_name === "admin")); }
+function batchView(m: Manifest) { return { id: m.id, title: m.title, createdAt: m.createdAt, updatedAt: m.updatedAt, status: m.status, files: m.files.map(({ id, name, pages, processedPages, status, error }) => ({ id, name, pages, processedPages, status, error })), pages: m.pages.map(({ fileId, fileName, page, status, error }) => ({ fileId, fileName, page, status, error })) }; }
 function pageCount(text: string): number { const match = text.match(/^Pages:\s+(\d+)/m); return match ? Number(match[1]) : 0; }
 function safeName(name: string): string { return name.replace(/[^\w.\-\u4e00-\u9fff]+/g, "_").slice(0, 160) || "问卷.pdf"; }
 
 async function processBatch(batchId: string): Promise<void> {
   const m = await readManifest(batchId); if (!m) return;
+  for (const file of m.files) if (file.status === "processing") { file.status = "queued"; file.processedPages = 0; m.pages = m.pages.filter((page) => page.fileId !== file.id); }
   m.status = "processing"; await saveManifest(m);
   for (const file of m.files) {
     if (file.status === "done") continue;
@@ -87,7 +90,7 @@ async function processBatch(batchId: string): Promise<void> {
       for (let p = 1; p <= pages; p += 1) {
         const prefix = path.join(pageDir, `page-${p}`);
         await execFileAsync("pdftoppm", ["-f", String(p), "-l", String(p), "-png", "-r", "300", file.path, prefix]);
-        const image = `${prefix}-${p}.png`;
+        const image = `${prefix}-${String(p).padStart(3, "0")}.png`;
         try {
           const result = await recognizeAnswerCard({ identityMode: "legacy", imagePath: image, layoutPath: layoutFile, pageNumber: 1, dpi: 300 });
           m.pages.push({ fileId: file.id, fileName: file.name, page: p, status: String(result.status ?? "ok"), result });
@@ -110,6 +113,12 @@ async function processBatch(batchId: string): Promise<void> {
     latest.status = latest.files.some((f) => f.status === "error") ? "completed_with_errors" : "completed";
     await saveManifest(latest);
   }
+}
+
+function startBatchJob(id: string): void {
+  if (activeJobs.has(id)) return;
+  const job = processBatch(id).finally(() => activeJobs.delete(id));
+  activeJobs.set(id, job);
 }
 
 function summaryRows(m: Manifest) {
@@ -139,11 +148,12 @@ function exportWorkbook(m: Manifest): Buffer {
 export function createWenjuanRouter(): express.Router {
   const router = express.Router();
   const upload = multer({ dest: path.join(wenjuanDir, "_tmp"), limits: { files: 20, fileSize: 128 * 1024 * 1024 }, fileFilter: (_req, file, cb) => { if (file.mimetype === "application/pdf" || path.extname(file.originalname).toLowerCase() === ".pdf") cb(null, true); else cb(new Error("仅支持 PDF 文件")); } });
-  router.post("/batches", async (req, res) => { await ensureLayout(); const id = randomUUID(); const m: Manifest = { id, title: typeof req.body?.title === "string" && req.body.title.trim() ? req.body.title.trim().slice(0, 120) : "初一年级评教评学问卷", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), status: "created", files: [], pages: [] }; await manifestPath(id); await saveManifest(m); res.json({ batchId: id, status: m.status }); });
-  router.post("/batches/:batchId/uploads", upload.array("files", 20), async (req, res) => { const id = String(req.params.batchId); const m = await readManifest(id); if (!m) { res.status(404).json({ message: "批次不存在" }); return; } const files = (req.files as Express.Multer.File[] | undefined) ?? []; if (!files.length) { res.status(400).json({ message: "请选择 PDF 文件" }); return; } for (const f of files) { const fileId = randomUUID(); const dir = path.join(batchesDir, id, "files"); await mkdir(dir, { recursive: true }); const target = path.join(dir, `${fileId}.pdf`); await rename(f.path, target); m.files.push({ id: fileId, name: safeName(f.originalname), path: target, status: "queued" }); } await saveManifest(m); if (!activeJobs.has(id)) { const job = processBatch(id).finally(() => activeJobs.delete(id)); activeJobs.set(id, job); } else { emit(id, "progress", m); } res.status(202).json({ batchId: id, status: "processing", files: files.length }); });
-  router.get("/batches/:batchId", async (req, res) => { const m = await readManifest(String(req.params.batchId)); if (!m) { res.status(404).json({ message: "批次不存在" }); return; } res.json(m); });
-  router.get("/batches/:batchId/events", async (req, res) => { const id = String(req.params.batchId); const m = await readManifest(id); if (!m) { res.status(404).end(); return; } res.setHeader("Content-Type", "text/event-stream; charset=utf-8"); res.setHeader("Cache-Control", "no-cache"); res.setHeader("Connection", "keep-alive"); const send = (event: string, data: unknown) => { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }; send("progress", m); const set = listeners.get(id) ?? new Set(); set.add(send); listeners.set(id, set); req.on("close", () => { set.delete(send); if (!set.size) listeners.delete(id); }); });
-  router.get("/batches/:batchId/export", async (req, res) => { const m = await readManifest(String(req.params.batchId)); if (!m) { res.status(404).json({ message: "批次不存在" }); return; } const buffer = exportWorkbook(m); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''wenjuan-${encodeURIComponent(m.title)}.xlsx`); res.send(buffer); });
+  router.post("/batches", async (req, res) => { await ensureLayout(); const id = randomUUID(); const m: Manifest = { id, ownerId: req.user?.id, title: typeof req.body?.title === "string" && req.body.title.trim() ? req.body.title.trim().slice(0, 120) : "初一年级评教评学问卷", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), status: "created", files: [], pages: [] }; await manifestPath(id); await saveManifest(m); res.json({ batchId: id, status: m.status }); });
+  router.get("/batches", async (req, res) => { await mkdir(batchesDir, { recursive: true }); const entries = await readdir(batchesDir, { withFileTypes: true }); const batches: ReturnType<typeof batchView>[] = []; for (const entry of entries) { if (!entry.isDirectory()) continue; const m = await readManifest(entry.name); if (m && visibleTo(m, req.user)) { if (m.status === "processing" && m.files.some((file) => file.status !== "done")) startBatchJob(m.id); batches.push(batchView(m)); } } batches.sort((a, b) => b.createdAt.localeCompare(a.createdAt)); res.json({ batches }); });
+  router.post("/batches/:batchId/uploads", upload.array("files", 20), async (req, res) => { const id = String(req.params.batchId); const m = await readManifest(id); if (!m || !visibleTo(m, req.user)) { res.status(404).json({ message: "批次不存在" }); return; } const files = (req.files as Express.Multer.File[] | undefined) ?? []; if (!files.length) { res.status(400).json({ message: "请选择 PDF 文件" }); return; } for (const f of files) { const fileId = randomUUID(); const dir = path.join(batchesDir, id, "files"); await mkdir(dir, { recursive: true }); const target = path.join(dir, `${fileId}.pdf`); await rename(f.path, target); m.files.push({ id: fileId, name: safeName(f.originalname), path: target, status: "queued" }); } await saveManifest(m); startBatchJob(id); res.status(202).json({ batchId: id, status: "processing", files: files.length }); });
+  router.get("/batches/:batchId", async (req, res) => { const m = await readManifest(String(req.params.batchId)); if (!m || !visibleTo(m, req.user)) { res.status(404).json({ message: "批次不存在" }); return; } if (m.status === "processing" && m.files.some((file) => file.status !== "done")) startBatchJob(m.id); res.json(batchView(m)); });
+  router.get("/batches/:batchId/events", async (req, res) => { const id = String(req.params.batchId); const m = await readManifest(id); if (!m || !visibleTo(m, req.user)) { res.status(404).end(); return; } res.setHeader("Content-Type", "text/event-stream; charset=utf-8"); res.setHeader("Cache-Control", "no-cache"); res.setHeader("Connection", "keep-alive"); const send = (event: string, data: unknown) => { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }; send("progress", batchView(m)); const set = listeners.get(id) ?? new Set(); set.add(send); listeners.set(id, set); req.on("close", () => { set.delete(send); if (!set.size) listeners.delete(id); }); });
+  router.get("/batches/:batchId/export", async (req, res) => { const m = await readManifest(String(req.params.batchId)); if (!m || !visibleTo(m, req.user)) { res.status(404).json({ message: "批次不存在" }); return; } const buffer = exportWorkbook(m); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''wenjuan-${encodeURIComponent(m.title)}.xlsx`); res.send(buffer); });
   return router;
 }
 
