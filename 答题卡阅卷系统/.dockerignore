@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+release
+.npm-cache
+.git
+electron
+原生识别器/ScannerBridge
+运行资源/native/win-ia32
+运行资源/native/win-x64
+脚本/*.bat
+AGENTS.md

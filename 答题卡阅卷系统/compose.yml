@@ -1,0 +1,52 @@
+version: "2.4"
+
+services:
+  answer-card-db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${PROJECTX_MARIADB_DATABASE}
+      MARIADB_USER: ${PROJECTX_MARIADB_USER}
+      MARIADB_PASSWORD: ${PROJECTX_MARIADB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+    volumes:
+      - answer-card-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h localhost -u root -p$${MARIADB_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  answer-card:
+    build:
+      context: .
+      args:
+        OPENCV_VERSION: 4.13.0
+    restart: unless-stopped
+    depends_on:
+      answer-card-db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 5174
+      PROJECTX_MARIADB_HOST: answer-card-db
+      PROJECTX_MARIADB_PORT: 3306
+      PROJECTX_MARIADB_DATABASE: ${PROJECTX_MARIADB_DATABASE}
+      PROJECTX_MARIADB_USER: ${PROJECTX_MARIADB_USER}
+      PROJECTX_MARIADB_PASSWORD: ${PROJECTX_MARIADB_PASSWORD}
+      PROJECTX_ADMIN_PASSWORD: ${PROJECTX_ADMIN_PASSWORD}
+      PROJECTX_ENABLE_SCANNER: "0"
+      PROJECTX_ENABLE_SCANNER_CLIENT_API: "0"
+      PROJECTX_AUTH_ENFORCE: "1"
+      PROJECTX_BIND_HOST: "0.0.0.0"
+      ANSWER_CARD_DATA_DIR: /app/data/answer-card
+      ANSWER_CARD_RECOGNIZER_EXE: /app/运行资源/native/linux-x64/answer-card-recognizer
+      PROJECTX_TRUST_PROXY: "1"
+    ports:
+      - "127.0.0.1:${ANSWER_CARD_PORT}:5174"
+    volumes:
+      - answer-card-data:/app/data/answer-card
+
+volumes:
+  answer-card-db:
+  answer-card-data:
