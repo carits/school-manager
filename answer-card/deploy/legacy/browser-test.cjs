@@ -1,0 +1,35 @@
+const http=require('node:http'),fs=require('node:fs'),assert=require('node:assert/strict');
+const {chromium}=require('/tmp/browser/node_modules/playwright-core');
+const state=JSON.parse(fs.readFileSync('/tmp/state.json'));
+const server=http.createServer((req,res)=>{let p=req.url;if(p.startsWith('/answer-card/legacy-api/'))p=p.slice('/answer-card/legacy-api'.length);else if(p.startsWith('/answer-card/'))p=p.slice('/answer-card'.length);
+const proxy=http.request({hostname:'legacy-old-app',port:5174,path:p,method:req.method,headers:{...req.headers,host:'127.0.0.1:8080'}},r=>{res.writeHead(r.statusCode,r.headers);r.pipe(res)});proxy.on('error',e=>{res.writeHead(502);res.end(e.message)});req.pipe(proxy)});
+let browser;
+(async()=>{await new Promise(r=>server.listen(8080,'127.0.0.1',r));
+browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu']});const page=await browser.newPage({viewport:{width:1440,height:1000}});
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+await page.goto('http://127.0.0.1:8080/answer-card/custom-pdf/');
+console.log('LOGIN TEXT', (await page.locator('body').innerText()).slice(0,600));
+if(await page.getByRole('radio',{name:/明澈/}).count()){await page.getByRole('radio',{name:/明澈/}).click();await page.getByRole('button',{name:'使用明澈风格，进入登录'}).click();}
+const inputs=page.locator('input');console.log('inputs',await inputs.count());await inputs.nth(0).fill(state.users[0].name);await page.locator('input[type=password]').first().fill(state.password);await page.getByRole('button',{name:/登录/}).click();
+await page.getByRole('heading',{name:'自定义 PDF 答题卡阅卷'}).waitFor({timeout:15000});
+await page.screenshot({path:'/tmp/legacy-ui.png',fullPage:true});
+await page.getByRole('combobox').first().selectOption('d8032741-c729-4d2d-93d6-97699d44267a');
+await page.getByAltText('模板第1页').waitFor();
+await page.getByAltText('模板第1页').evaluate(async img=>{if(!img.complete)await new Promise(r=>{img.onload=r;img.onerror=r})});
+assert(await page.getByAltText('模板第1页').evaluate(img=>img.naturalWidth>0),'template image loads');
+await page.locator('select').filter({has:page.locator('option[value="qr"]')}).selectOption('qr');
+const area=await page.getByAltText('模板第1页').boundingBox();assert(area);
+await page.mouse.move(area.x+area.width*.25,area.y+area.height*.18);await page.mouse.down();
+await page.mouse.move(area.x+area.width*.37,area.y+area.height*.24,{steps:10});await page.mouse.up();
+await page.screenshot({path:'/tmp/legacy-template.png',fullPage:true});
+await page.getByRole('button',{name:'撤销',exact:true}).click();
+await page.getByRole('button',{name:'保存模板',exact:true}).click();
+await page.getByRole('status').filter({hasText:'模板已保存'}).waitFor();
+await page.getByRole('button',{name:'扫描与确认',exact:true}).click();
+assert((await page.locator('body').innerText()).includes('上传扫描'));
+console.log('BROWSER TEMPLATE IMAGE / DRAG / UNDO / SAVE / SCAN TAB PASS');
+
+console.log('BODY', (await page.locator('body').innerText()).slice(0,3000));
+console.log('ERRORS',JSON.stringify(errors));assert.equal(errors.length,0);
+await browser.close();server.close();console.log('BROWSER LOGIN PASS');
+})().catch(async e=>{console.error(e);if(browser)await browser.close();server.close();process.exit(1)});

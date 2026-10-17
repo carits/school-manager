@@ -33,6 +33,12 @@ export async function markScoreMutated(
   actorId: number | null,
   reason: ScoreMutationReason
 ): Promise<boolean> {
+  // Most live grading exams have never published scores. Avoid taking the
+  // same exam-row write lock for every teacher's independent submission.
+  const exam = await tx.get<{ score_published: number | null }>(
+    "SELECT score_published FROM exams WHERE id = ?", examId
+  );
+  if (Number(exam?.score_published ?? 0) !== 1) return false;
   // 置 0（未公布）：成绩一有变动即视为「尚未公布」，学生读门只认 =1，改后立即不可见。
   // 保持与既有约定一致（verify:security-critical 断言 score_published===0）。
   const result = await tx.run(

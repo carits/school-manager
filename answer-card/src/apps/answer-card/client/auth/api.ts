@@ -14,13 +14,16 @@ function isScannerBuild(): boolean {
 }
 function getApiBase(): string {
   if (isScannerBuild()) return "";
+  if (typeof window !== "undefined" && /^\/answer-card\/review(?:\/|$)/.test(window.location.pathname)) return "/answer-card";
+  if (getViteEnv()?.VITE_LEGACY_ONLY === "1") return "/answer-card/legacy-api";
   const configured = readServerUrl() || (getViteEnv()?.VITE_PROJECTX_API_BASE ?? "").replace(/\/+$/, "");
   if (configured) return configured;
   // The production web app is mounted below /answer-card/. Keep local
   // development at the root while making same-origin API calls work through
   // the Nginx path prefix in production.
-  if (typeof window !== "undefined" && /^\/answer-card(?:\/|$)/.test(window.location.pathname)) {
-    return "/answer-card";
+  if (typeof window !== "undefined") {
+    if (/^\/wenjuan(?:\/|$)/.test(window.location.pathname)) return "/wenjuan";
+    if (/^\/answer-card(?:\/|$)/.test(window.location.pathname)) return "/answer-card";
   }
   return "";
 }
@@ -44,13 +47,13 @@ const API_KEY_EXPIRE_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function getStoredApiKey(): string | null {
   try {
-    const raw = localStorage.getItem("projectx_api_key");
+    const raw = localStorage.getItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy_old_api_key' : 'projectx_api_key') : 'projectx_api_key'));
     if (!raw) return null;
     try {
       const parsed = JSON.parse(raw) as { v?: number; k?: string; exp?: number };
       if (parsed?.v === 1 && typeof parsed.k === "string") {
         if (typeof parsed.exp === "number" && Date.now() > parsed.exp) {
-          localStorage.removeItem("projectx_api_key");
+          localStorage.removeItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy_old_api_key' : 'projectx_api_key') : 'projectx_api_key'));
           return null;
         }
         return parsed.k;
@@ -65,10 +68,10 @@ export function getStoredApiKey(): string | null {
 export function storeApiKey(key: string | null): void {
   try {
     if (!key) {
-      localStorage.removeItem("projectx_api_key");
+      localStorage.removeItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy_old_api_key' : 'projectx_api_key') : 'projectx_api_key'));
       return;
     }
-    localStorage.setItem("projectx_api_key", JSON.stringify({ v: 1, k: key, exp: Date.now() + API_KEY_EXPIRE_MS }));
+    localStorage.setItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy_old_api_key' : 'projectx_api_key') : 'projectx_api_key'), JSON.stringify({ v: 1, k: key, exp: Date.now() + API_KEY_EXPIRE_MS }));
   } catch {
     /* ignore */
   }
@@ -105,7 +108,7 @@ function notifyUnauthorized(): void {
   setAuthToken(null);
   // 安全（R30）：会话失效时把已签发的媒体票据一并丢掉，别让缓存继续产出注定 401 的 URL。
   ticketCache.clear();
-  window.dispatchEvent(new Event("projectx:unauthorized"));
+  window.dispatchEvent(new Event((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old:unauthorized' : 'projectx:unauthorized') : 'projectx:unauthorized')));
 }
 
 /** 跨域 API 模式（getApiBase() 非空）：无法共享 HttpOnly Cookie，需用内存 token 兜底。 */
@@ -171,7 +174,7 @@ export async function fetchJson<T>(url: string, options?: RequestInit): Promise<
   if (typeof options?.body === "string" && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(apiUrl(url), { ...options, headers, credentials: "include" });
+  const response = await fetch(apiUrl(url), { ...options, headers, credentials: "include", cache: "no-store" });
   if (!response.ok) {
     let message = response.statusText;
     let body: Record<string, unknown> | null = null;

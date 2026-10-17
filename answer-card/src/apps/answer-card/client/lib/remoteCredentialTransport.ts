@@ -18,7 +18,7 @@
 // （见 scripts/verify-insecure-remote-transport.ts）。
 
 /** 允许跨机明文发送凭据的 host:port 白名单（显式勾选后写入，按目标主机粒度记录）。 */
-export const INSECURE_TRANSPORT_HOSTS_KEY = "projectx_insecure_http_hosts";
+export const INSECURE_TRANSPORT_HOSTS_KEY = "legacy-old_insecure_http_hosts";
 
 export type CredentialTransportReason =
   | "https"

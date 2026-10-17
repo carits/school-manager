@@ -1,0 +1,6 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {chromium}=require('/tmp/browser/node_modules/playwright-core');
+(async()=>{const browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});try{const page=await browser.newPage();const requests=[],errors=[];page.on('request',r=>{if(r.url().includes('/api/'))requests.push(r.url())});page.on('pageerror',e=>errors.push(e.message));
+const auth=page.waitForResponse(r=>r.url().includes('/api/auth/me'),{timeout:20000});await page.goto('https://carits.top/answer-card/review/',{waitUntil:'domcontentloaded'});const response=await auth;assert.equal(response.url(),'https://carits.top/answer-card/api/auth/me');assert.equal(response.status(),401);
+await page.locator('input[type=password]').first().waitFor({state:'attached'});assert(!requests.some(u=>u.includes('/legacy-api/')));assert.equal(errors.length,0);const result={requests,errors,authStatus:response.status(),url:response.url()};fs.writeFileSync('/tmp/protected-browser.json',JSON.stringify(result,null,2));console.log('PASS protected review browser requests original API; login renders',JSON.stringify(result));
+}finally{await browser.close()}})().catch(e=>{console.error(e);process.exit(1)});

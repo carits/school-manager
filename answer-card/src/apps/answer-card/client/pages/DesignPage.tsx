@@ -1,6 +1,7 @@
 // DesignPage — 答题卡设计器（严格按 design/designer-sandbox.html + demo.html 视觉规格）
 // 两级流程：select=卡片画廊 / editor=三栏工作台
-import { useEffect, useState } from "react";
+import {pdfTemplateVersions} from "../../../../shared/pdfTemplateVersions";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowDown,
@@ -21,7 +22,8 @@ import { Group, Panel as ResizePanel, Separator, useDefaultLayout, usePanelRef }
 import { useWorkspace } from "../WorkspaceContext";
 import type { ObjectiveBlock, SubjectiveBlock } from "../../../../shared/types";
 import type { AnswerCard, LayoutDocument } from "../../../../shared/types";
-import { fetchJson } from "../auth/api";
+import { apiUrl, fetchJson } from "../auth/api";
+import { useAuth } from "../auth/AuthContext";
 import { cn } from "../lib/utils";
 import { CardPreview, ObjectiveEditor, SubjectiveEditor } from "./DesignEditors";
 import { NewCardModal, type NewCardFormData } from "../components/NewCardModal";
@@ -63,6 +65,7 @@ export function DesignPage() {
     designScreen,
     setDesignScreen,
     loadCard,
+    refreshCards,
     createCard,
     deleteCard,
     saveCard,
@@ -85,6 +88,37 @@ export function DesignPage() {
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; cardId: string } | null>(null);
   const [showNewCardModal, setShowNewCardModal] = useState(false);
+  const externalTemplateInputRef = useRef<HTMLInputElement>(null);
+  const [isImportingExternal, setIsImportingExternal] = useState(false);
+  const { user } = useAuth();
+  const canManagePdf = import.meta.env.VITE_LEGACY_ONLY === "1"
+    && !!user && (Number(user.role_id) === 1 || user.teacher_role === "grade_leader");
+  const [pdfTemplates, setPdfTemplates] = useState<Array<{id:string;family_id?:string;card_id?:string|null;title:string;revision:number;status:string;archived_at?:string|null}>>([]);
+  const [showPdfHistory, setShowPdfHistory] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState("");
+  useEffect(() => {
+    if (!canManagePdf || designScreen !== "select") { setPdfTemplates([]); return; }
+    let active = true;
+    setPdfLoading(true);
+    setPdfError("");
+    void fetchJson<{templates:typeof pdfTemplates}>("/api/templates").then(data => {
+      if (active) setPdfTemplates(data.templates);
+    }).catch(error => {
+      if (active) setPdfError(error instanceof Error ? error.message : "PDF 模板加载失败");
+    }).finally(() => { if (active) setPdfLoading(false); });
+    return () => { active = false; };
+  }, [canManagePdf, user?.id, designScreen]);
+
+
+  // Custom PDF publications create cards for legacy exam bindings. They are
+  // represented by the PDF tile, while native designer cards keep their editor.
+  const customPdfTemplates = pdfTemplates.filter(t => !t.family_id?.startsWith("native:"));
+  const pdfCardIds = new Set(customPdfTemplates.flatMap(t => t.card_id ? [t.card_id] : []));
+  const galleryCards = cards.filter(c => !pdfCardIds.has(c.id));
+  const pdfVersions=pdfTemplateVersions(customPdfTemplates);
+  const pdfHistoryCount=pdfVersions.history.length;
+  const galleryPdfTemplates=showPdfHistory?customPdfTemplates:pdfVersions.current;
 
   const selectedBlock = card ? (card.bodyBlocks.find((b) => b.id === selectedBlockId) ?? null) : null;
 
@@ -142,6 +176,32 @@ export function DesignPage() {
     }
   };
 
+  const importExternalTemplate = async (file: File) => {
+    setIsImportingExternal(true);
+    try {
+      const text = await file.text();
+      let template: unknown;
+      try {
+        template = JSON.parse(text);
+      } catch {
+        throw new Error("\u6a21\u677f\u6587\u4ef6\u4e0d\u662f\u6709\u6548\u7684 JSON");
+      }
+      const created = await fetchJson<AnswerCard>("/api/cards/external-template", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template }),
+      });
+      await refreshCards();
+      await loadCard(created.id);
+      setDesignScreen("editor");
+    } catch (err) {
+      alert("\u5bfc\u5165\u5916\u90e8\u7b54\u9898\u5361\u5931\u8d25\uff1a" + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsImportingExternal(false);
+      if (externalTemplateInputRef.current) externalTemplateInputRef.current.value = "";
+    }
+  };
+
   const handleDeleteCard = async (id: string) => {
     const item = cards.find((c) => c.id === id);
     const ok = await deleteCard(id);
@@ -158,7 +218,40 @@ export function DesignPage() {
   if (designScreen === "select") {
     return (
       <div className="flex h-full flex-col overflow-auto p-6 pt-8">
-        {cards.length === 0 ? (
+        <div className="mb-4 flex items-center justify-end gap-2">
+          {canManagePdf && <Button variant="outline" size="sm" onClick={() => window.location.assign("/answer-card/custom-pdf/")}>
+            <FileUp size={16} /> 自定义 PDF / 上传模板
+          </Button>}
+          <input
+            ref={externalTemplateInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importExternalTemplate(file);
+            }}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!canDesign || isImportingExternal}
+            onClick={() => externalTemplateInputRef.current?.click()}
+          >
+            <FileUp size={16} /> {isImportingExternal ? "\u6b63\u5728\u5bfc\u5165..." : "\u5bfc\u5165\u5916\u90e8\u7b54\u9898\u5361"}
+          </Button>
+        </div>
+        {pdfHistoryCount > 0 && (
+          <div className="mb-4 flex justify-end">
+            <Button variant="outline" size="sm" onClick={() => setShowPdfHistory(value => !value)}
+              aria-expanded={showPdfHistory}>
+              {showPdfHistory ? "收起历史版本" : "显示历史版本（"+pdfHistoryCount+"）"}
+            </Button>
+          </div>
+        )}
+        {pdfLoading && <p role="status" className="mb-4 text-sm text-muted-foreground">正在加载 PDF 答题卡…</p>}
+        {pdfError && <p role="alert" className="mb-4 text-sm text-destructive-fg">PDF 模板加载失败：{pdfError}</p>}
+        {galleryCards.length === 0 && galleryPdfTemplates.length === 0 && !pdfLoading && !pdfError ? (
           <EmptyState
             icon={<SquarePen />}
             title="暂无答题卡"
@@ -171,7 +264,24 @@ export function DesignPage() {
           />
         ) : (
           <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(228px,1fr))] items-stretch gap-4">
-            {cards.map((c) => (
+            {galleryPdfTemplates.map(t => (
+              <a key={"pdf-"+t.id} href={"/answer-card/custom-pdf/?template="+encodeURIComponent(t.id)}
+                className="rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+                <Card interactive className="flex h-[248px] flex-col overflow-hidden">
+                  <div className="flex h-[180px] shrink-0 items-center justify-center overflow-hidden border-b border-border-subtle bg-muted">
+                    <img src={apiUrl("/api/templates/"+encodeURIComponent(t.id)+"/pages/1")}
+                      alt={t.title+"预览"} loading="lazy" className="h-full w-full object-contain object-top" />
+                  </div>
+                  <div className="flex h-[68px] shrink-0 flex-col justify-center gap-1 overflow-hidden px-3 py-2.5">
+                    <CardTitle className="truncate text-sm" title={t.title}>{t.title}</CardTitle>
+                    <CardDescription className="truncate text-xs">
+                      自定义 PDF · v{t.revision} · {t.archived_at ? "已归档" : t.status === "published" ? "已发布" : "草稿"}
+                    </CardDescription>
+                  </div>
+                </Card>
+              </a>
+            ))}
+            {galleryCards.map((c) => (
               <Card
                 key={c.id}
                 interactive

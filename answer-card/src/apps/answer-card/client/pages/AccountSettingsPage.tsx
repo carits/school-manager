@@ -166,7 +166,7 @@ export function AccountSettingsPage() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("grading");
   // 五轮C1：侧边栏自动展开（客户端级 localStorage 设置，原误放系统级配置页，迁至此「外观/皮肤」区）
   const [railAutoExpand, setRailAutoExpand] = useState(() => {
-    try { return localStorage.getItem("projectx-rail-auto-expand") === "true"; } catch { return false; }
+    try { return localStorage.getItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-rail-auto-expand' : 'projectx-rail-auto-expand') : 'projectx-rail-auto-expand')) === "true"; } catch { return false; }
   });
   // v1.9.0: Tab 栏开关
   const [showTabBar, setShowTabBar] = useState(false);
@@ -483,8 +483,8 @@ export function AccountSettingsPage() {
                       checked={railAutoExpand}
                       onCheckedChange={(next) => {
                         setRailAutoExpand(next === true);
-                        try { localStorage.setItem("projectx-rail-auto-expand", String(next === true)); } catch { /* ignore storage failures */ }
-                        window.dispatchEvent(new CustomEvent("projectx:rail-auto-expand", { detail: next === true }));
+                        try { localStorage.setItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-rail-auto-expand' : 'projectx-rail-auto-expand') : 'projectx-rail-auto-expand'), String(next === true)); } catch { /* ignore storage failures */ }
+                        window.dispatchEvent(new CustomEvent((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old:rail-auto-expand' : 'projectx:rail-auto-expand') : 'projectx:rail-auto-expand'), { detail: next === true }));
                       }}
                     />
                   }
@@ -708,7 +708,7 @@ export function AccountSettingsPage() {
                       type="text"
                       value={dbUser}
                       onChange={(e) => setDbUser(e.target.value)}
-                      placeholder="projectx_app"
+                      placeholder="legacy-old_app"
                       className="text-sm"
                     />
                   </Field>

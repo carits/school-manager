@@ -1,0 +1,10 @@
+const mysql=require('/app/node_modules/mysql2/promise'),assert=require('assert/strict');
+(async()=>{const e=process.env;assert.equal(e.PROJECTX_MARIADB_HOST,'legacy-old-db');assert.equal(e.PROJECTX_MARIADB_DATABASE,'school_manager_legacy');
+const c=await mysql.createConnection({host:e.PROJECTX_MARIADB_HOST,user:e.PROJECTX_MARIADB_USER,password:e.PROJECTX_MARIADB_PASSWORD,database:e.PROJECTX_MARIADB_DATABASE});
+try{const [actual]=await c.query('SELECT DATABASE() name');assert.equal(actual[0].name,'school_manager_legacy');
+for(const [table,fields] of Object.entries({legacy_pdf_results:{final_source:'VARCHAR(24) NULL',recognizer_version:'VARCHAR(80) NULL'},legacy_pdf_jobs:{kind:"VARCHAR(24) NOT NULL DEFAULT 'scan'",run_id:'VARCHAR(64) NULL',payload_json:'LONGTEXT NULL'}}))for(const [field,type] of Object.entries(fields)){const [cols]=await c.execute('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?',[table,field]);if(!cols.length)await c.query('ALTER TABLE '+table+' ADD COLUMN '+field+' '+type)}
+const [rows]=await c.query('SELECT id FROM legacy_pdf_results WHERE final_source IS NULL AND final_value IS NOT NULL'),ids=new Set(rows.map(r=>r.id)),sources=new Map();
+const [history]=await c.query("SELECT entity_id,action,after_json FROM legacy_pdf_audit WHERE entity_type='result' AND action IN('auto_accept_and_score','confirm_or_edit','objective_reprocess') ORDER BY id DESC");
+for(const h of history){if(!ids.has(h.entity_id)||sources.has(h.entity_id))continue;const a=JSON.parse(h.after_json||'{}');sources.set(h.entity_id,h.action==='auto_accept_and_score'?'auto':h.action==='objective_reprocess'?a.source||'legacy_unknown':'manual')}
+await c.beginTransaction();for(const r of rows)await c.execute('UPDATE legacy_pdf_results SET final_source=? WHERE id=? AND final_source IS NULL',[sources.get(r.id)||'legacy_unknown',r.id]);await c.commit();console.log(JSON.stringify({database:actual[0].name,backfilled:rows.length}));
+}finally{await c.end()}})().catch(e=>{console.error(e.message);process.exitCode=1});

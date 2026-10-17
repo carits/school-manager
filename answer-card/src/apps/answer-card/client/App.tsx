@@ -101,6 +101,7 @@ const GuideRoutePage = lazy(() => import("./pages/InfoRoutePages").then((m) => (
 const GlobalSettingsRoutePage = lazy(() => import("./pages/GlobalSettingsRoutePage").then((m) => ({ default: m.GlobalSettingsRoutePage })));
 const AdminConsoleRoutePage = lazy(() => import("./pages/AdminConsoleRoutePage").then((m) => ({ default: m.AdminConsoleRoutePage })));
 const GradePanel = lazy(() => import("./components/GradePanel").then((m) => ({ default: m.GradePanel })));
+const ReviewGroupPanel = lazy(() => import("./components/ReviewGroupPanel").then((m) => ({ default: m.ReviewGroupPanel })));
 const PaperUploadPanel = lazy(() => import("./components/PaperUploadPanel").then((m) => ({ default: m.PaperUploadPanel })));
 
 // 懒加载路由切换时的居中加载指示（与 loading 态文案一致）
@@ -357,7 +358,7 @@ function App() {
   const [exportCheck, setExportCheck] = useState<PdfWarningState | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
-      return (localStorage.getItem("projectx-theme") as "light" | "dark") || "light";
+      return (localStorage.getItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-theme' : 'projectx-theme') : 'projectx-theme')) as "light" | "dark") || "light";
     } catch {
       return "light";
     }
@@ -369,32 +370,32 @@ function App() {
   // 未来新增皮肤在 tokens.css 加 [data-skin="xxx"] 覆盖块 + SkinSwitcher 注册表登记。
   const [skin, setSkin] = useState<string>(() => {
     try {
-      return localStorage.getItem("projectx-skin") || DEFAULT_SKIN;
+      return localStorage.getItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-skin' : 'projectx-skin') : 'projectx-skin')) || DEFAULT_SKIN;
     } catch {
       return DEFAULT_SKIN;
     }
   });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [railCollapsed, setRailCollapsed] = useState(() => {
-    try { return localStorage.getItem("projectx-rail-collapsed") === "true"; } catch { return false; }
+    try { return localStorage.getItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-rail-collapsed' : 'projectx-rail-collapsed') : 'projectx-rail-collapsed')) === "true"; } catch { return false; }
   });
   const [railExpandedOnHover, setRailExpandedOnHover] = useState(false);
   const [railAutoExpand, setRailAutoExpand] = useState(() => {
     // v2.1.0: 自动展开默认关闭（仅显式开启过才为 true），避免鼠标扫过侧栏边缘即展开的干扰
-    try { return localStorage.getItem("projectx-rail-auto-expand") === "true"; } catch { return false; }
+    try { return localStorage.getItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-rail-auto-expand' : 'projectx-rail-auto-expand') : 'projectx-rail-auto-expand')) === "true"; } catch { return false; }
   });
   const railCollapseTimerRef = useRef<number | null>(null);
   const railExpandTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("projectx-rail-collapsed");
+      const saved = localStorage.getItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-rail-collapsed' : 'projectx-rail-collapsed') : 'projectx-rail-collapsed'));
       if (saved !== null) setRailCollapsed(saved === "true");
     } catch { /* ignore storage failures */ }
   }, []);
 
   useEffect(() => {
-    try { localStorage.setItem("projectx-rail-collapsed", String(railCollapsed)); } catch { /* ignore storage failures */ }
+    try { localStorage.setItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-rail-collapsed' : 'projectx-rail-collapsed') : 'projectx-rail-collapsed'), String(railCollapsed)); } catch { /* ignore storage failures */ }
   }, [railCollapsed]);
 
   useEffect(() => {
@@ -402,8 +403,8 @@ function App() {
       const value = (event as CustomEvent<boolean>).detail;
       if (typeof value === "boolean") setRailAutoExpand(value);
     };
-    window.addEventListener("projectx:rail-auto-expand", syncRailSetting);
-    return () => window.removeEventListener("projectx:rail-auto-expand", syncRailSetting);
+    window.addEventListener((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old:rail-auto-expand' : 'projectx:rail-auto-expand') : 'projectx:rail-auto-expand'), syncRailSetting);
+    return () => window.removeEventListener((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old:rail-auto-expand' : 'projectx:rail-auto-expand') : 'projectx:rail-auto-expand'), syncRailSetting);
   }, []);
   const effectiveRailCollapsed = railCollapsed && !railExpandedOnHover;
 
@@ -556,7 +557,7 @@ function App() {
         // v37: 明暗方案账号级持久化 —— 仅当用户从未在本机显式选择过（无 localStorage 覆盖）时，
         // 采用服务端 colorScheme；否则沿用本机偏好（保留 localStorage 回退，设备级优先）。
         // 本机一旦切换即触发下方「明暗变更→PATCH」回写，账号值随之更新（跨设备可恢复）。
-        if (s.colorScheme && !localStorage.getItem("projectx-theme")) {
+        if (s.colorScheme && !localStorage.getItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-theme' : 'projectx-theme') : 'projectx-theme'))) {
           setTheme(s.colorScheme === "dark" ? "dark" : "light");
         }
       })
@@ -638,7 +639,7 @@ function App() {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     try {
-      localStorage.setItem("projectx-theme", theme);
+      localStorage.setItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-theme' : 'projectx-theme') : 'projectx-theme'), theme);
     } catch {
       /* private browsing / storage disabled */
     }
@@ -649,7 +650,7 @@ function App() {
   // 登录同步 effect 据此区分显式选择与默认值落盘）。
   useEffect(() => {
     document.documentElement.dataset.skin = skin;
-    try { localStorage.setItem("projectx-skin", skin); } catch { /* private browsing / storage disabled */ }
+    try { localStorage.setItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-skin' : 'projectx-skin') : 'projectx-skin'), skin); } catch { /* private browsing / storage disabled */ }
   }, [skin]);
 
   useEffect(() => {
@@ -1115,7 +1116,7 @@ function App() {
       try {
         const text = await file.text();
         const data = JSON.parse(text);
-        if (!data || data.format !== "projectx-card" || !data.card) {
+        if (!data || data.format !== (import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-card' : 'projectx-card') : 'projectx-card') || !data.card) {
           setStatus("不支持的文件格式，请使用 .projectx-card.json 导出文件");
           setIsBusy(false);
           return;
@@ -1973,7 +1974,7 @@ function App() {
       {gradingPanel && (
         <div className="fixed inset-0 z-(--px-z-lightbox) bg-background">
           <Suspense fallback={routeFallback}>
-            <GradePanel examId={gradingPanel.examId} blockId={gradingPanel.blockId} teacherId={user?.id ?? 0} onBack={() => setGradingPanel(null)} />
+            {gradingPanel.blockId.startsWith("review-group:") ? <ReviewGroupPanel key={gradingPanel.examId + ":" + gradingPanel.blockId} examId={gradingPanel.examId} groupId={gradingPanel.blockId.slice("review-group:".length)} teacherId={user?.id ?? 0} onBack={() => setGradingPanel(null)} /> : <GradePanel key={gradingPanel.examId + ":" + gradingPanel.blockId} examId={gradingPanel.examId} blockId={gradingPanel.blockId} teacherId={user?.id ?? 0} onBack={() => setGradingPanel(null)} />}
           </Suspense>
         </div>
       )}

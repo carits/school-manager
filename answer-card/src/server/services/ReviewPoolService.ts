@@ -1,4 +1,5 @@
 import { databaseTimestamp } from "../db/timestamp";
+import { assertLegacyQuestionNotGrouped } from "./LegacyReviewGroupScoreService";
 /**
  * Issue #174: 网阅试卷池
  *
@@ -192,7 +193,10 @@ export async function countHeldPapers(
     "SELECT COUNT(*) AS n FROM answer_block_crops WHERE claimed_by = ? AND exam_id = ? AND block_id = ?",
     teacherId, scope.examId, scope.blockId
   ) as { n: number } | undefined;
-  return { inBlock: Number(blockRow?.n ?? 0), total: Number(totalRow?.n ?? 0) };
+  const groupHeld = process.env.PROJECTX_LEGACY_ONLY === "1"
+    ? await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM legacy_review_group_scores WHERE claimed_by = ?", teacherId)
+    : undefined;
+  return { inBlock: Number(blockRow?.n ?? 0), total: Number(totalRow?.n ?? 0) + Number(groupHeld?.n ?? 0) };
 }
 
 /** 持有量闸门（安全 R15 + PR #312 CR9）：超限直接拒绝，避免个别教师占满题块。
@@ -370,14 +374,16 @@ export async function getPoolEntries(
     claimCount: crop.claimCount ?? 0
   }));
 
+  if(process.env.PROJECTX_LEGACY_ONLY==="1")entries.sort((a,b)=>(a.serialNumber??Number.MAX_SAFE_INTEGER)-(b.serialNumber??Number.MAX_SAFE_INTEGER)||a.id.localeCompare(b.id));
   return options.claimedBy === undefined
     ? entries
     : entries.filter((entry) => entry.claimedBy === options.claimedBy);
 }
 
 async function getPoolEntry(examId: number, blockId: string, cropId: string, db: DbAdapter): Promise<ReviewPoolEntry> {
-  const entries = await getPoolEntries(examId, blockId, {}, db);
-  const entry = entries.find((item) => item.id === cropId);
+  const crops = await listReviewBlockCrops({ examId, blockId, cropId }, db);
+  const crop = crops[0];
+  const entry: ReviewPoolEntry | undefined = crop ? { ...crop, claimCount: crop.claimCount ?? 0 } : undefined;
   if (!entry) throw new ReviewPoolError("试卷不存在");
   return entry;
 }
@@ -386,17 +392,32 @@ async function getPoolEntry(examId: number, blockId: string, cropId: string, db:
  * 从试卷池领取下一份未领取卷子（原子操作）。
  * 并发下多个教师同时领卷时，只有一人能拿到同一份。
  */
+async function assertLegacyBlockNotGrouped(db: DbAdapter, examId: number, blockId: string) {
+  if (process.env.PROJECTX_LEGACY_ONLY !== "1" || examId !== 22) return;
+  const row = await db.get<{ block_title: string | null }>(
+    "SELECT block_title FROM answer_block_crops WHERE exam_id=? AND block_id=? LIMIT 1", examId, blockId);
+  const number = /^第(\d+)题$/.exec(row?.block_title || "");
+  if (number) {
+    try { await assertLegacyQuestionNotGrouped(db, examId, Number(number[1])); }
+    catch (error) {
+      if ((error as { status?: number }).status === 409) throw new ReviewPoolError("此题已合并阅卷，请刷新后进入整组题目");
+      throw error;
+    }
+  }
+}
+
 export async function claimNextPaper(
   examId: number,
   blockId: string,
   teacherId: number,
   db: DbAdapter = getMysqlDb(),
-  options: { classId?: number; privileged?: boolean } = {}
+  options: { classId?: number; privileged?: boolean; afterSerial?: number } = {}
 ): Promise<ReviewPoolEntry> {
   const privileged = options.privileged === true;
   const assignedIds = await getAssignedStudentIdSet(examId, blockId, teacherId, db);
   const cropId = await db.transaction(async (tx) => withClaimReservation(tx, teacherId, privileged, async () => {
     // 安全 R15 + PR #312 CR9：持有量在领取临界区内结算，「先查后写」分离时并发能突破配额
+    await assertLegacyBlockNotGrouped(tx, examId, blockId);
     await assertHeldQuota(examId, blockId, teacherId, tx, privileged);
     const classFilter = options.classId
       ? `AND ${examClassPredicate("answer_block_crops.student_id", "answer_block_crops.exam_id")}`
@@ -416,15 +437,19 @@ export async function claimNextPaper(
     // 切片内的卷子优先：否则他人「已首评待二评」的卷子会按学号排在前头，
     // 把本人尚未开评的首评工作量挤到队尾（切片分工的本意）。
     const orderAffinity = inSliceSql ? `(${inSliceSql}) DESC, ` : "";
+    const serialExpr = `(SELECT s.serial_no FROM legacy_paper_serials s WHERE s.paper_id=answer_block_crops.source_record_id AND s.exam_id=answer_block_crops.exam_id LIMIT 1)`;
+    const bySerial = process.env.PROJECTX_LEGACY_ONLY === "1"
+      ? `${options.afterSerial ? `CASE WHEN ${serialExpr} > ? THEN 0 ELSE 1 END, ` : ""}${serialExpr}, ` : "";
     const candidates = await tx.all(
       `SELECT id, score_breakdown FROM answer_block_crops
        WHERE exam_id = ? AND block_id = ? AND ${statusClause()} AND claimed_by IS NULL ${classFilter} ${assignedFilter}
-       ORDER BY ${orderAffinity}student_number, page_number, segment_index`,
+       ORDER BY ${orderAffinity}${bySerial}student_number, page_number, segment_index`,
       examId,
       blockId,
       ...classParams,
       ...assignedParams,
-      ...(assignedIds && assignedIds.size > 0 ? [...assignedIds] : [])
+      ...(assignedIds && assignedIds.size > 0 ? [...assignedIds] : []),
+      ...(process.env.PROJECTX_LEGACY_ONLY === "1" && options.afterSerial ? [options.afterSerial] : [])
     ) as Array<{ id: string; score_breakdown: string | null }>;
     // 同一份卷不让同一人评两次（复核轮次由题块内的其他教师承接）
     const candidate = candidates.find((item) =>
@@ -449,6 +474,28 @@ export async function claimNextPaper(
   return getPoolEntry(examId, blockId, cropId, db);
 }
 
+/** Read-only lookahead: never reserves a paper; claim must recheck ownership atomically. */
+export async function previewNextPaper(examId: number, blockId: string, teacherId: number,
+  db: DbAdapter = getMysqlDb(), privileged = false, afterSerial?: number): Promise<ReviewPoolEntry | null> {
+  await assertLegacyBlockNotGrouped(db, examId, blockId);
+  const assigned = await getAssignedStudentIdSet(examId, blockId, teacherId, db);
+  const slice = assigned?.size
+    ? `student_id IN (${[...assigned].map(() => "?").join(",")})` : "";
+  const filter = assigned ? `AND (${postFirstRoundSqlClause()}${slice ? " OR " + slice : ""})` : "";
+  const serialExpr = `(SELECT s.serial_no FROM legacy_paper_serials s WHERE s.paper_id=answer_block_crops.source_record_id AND s.exam_id=answer_block_crops.exam_id LIMIT 1)`;
+  const bySerial = process.env.PROJECTX_LEGACY_ONLY === "1"
+    ? `${afterSerial ? `CASE WHEN ${serialExpr} > ? THEN 0 ELSE 1 END, ` : ""}${serialExpr}, ` : "";
+  // A bounded lookahead avoids scanning or decorating the entire pool for each switch.
+  const rows = await db.all<{id:string;score_breakdown:string|null}>(
+    `SELECT id,score_breakdown FROM answer_block_crops WHERE exam_id=? AND block_id=?
+     AND ${statusClause()} AND claimed_by IS NULL ${filter}
+     ORDER BY ${slice ? "(" + slice + ") DESC," : ""} ${bySerial}student_number,page_number,segment_index LIMIT 32`,
+    examId, blockId, ...(assigned ? [...assigned] : []), ...(slice ? [...assigned!] : []),
+    ...(process.env.PROJECTX_LEGACY_ONLY === "1" && afterSerial ? [afterSerial] : []));
+  const next = rows.find(row => !parseBreakdownHistory(row.score_breakdown).some(x => x.reviewerId === teacherId));
+  return next ? getPoolEntry(examId, blockId, next.id, db) : null;
+}
+
 /** 领取指定试卷（仅池中未被领取时成功） */
 export async function claimSpecificPaper(
   examId: number,
@@ -461,6 +508,7 @@ export async function claimSpecificPaper(
   const privileged = options.privileged === true;
   await db.transaction(async (tx) => withClaimReservation(tx, teacherId, privileged, async () => {
     // 安全 R15：持有量上限 + 逐生分配范围（指定 crop 时越权要显式拒绝，而非静默领到别人的卷子）
+    await assertLegacyBlockNotGrouped(tx, examId, blockId);
     await assertHeldQuota(examId, blockId, teacherId, tx, privileged);
     const assignedIds = await getAssignedStudentIdSet(examId, blockId, teacherId, tx);
     const existing = await tx.get<{

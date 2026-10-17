@@ -1,6 +1,7 @@
 import { getMysqlDb } from "../db";
 import type { DbAdapter } from "../db";
 import { randomDistribute } from "./RandomDistributionService";
+import { assertLegacyQuestionNotGrouped, readActiveReviewGroups, readReviewGroups } from "./LegacyReviewGroupScoreService";
 import { getBlockConfig } from "./BlockGradingConfigService";
 import { getPermittedBlocks, isPrivilegedGrader } from "../../apps/answer-card/server/middleware";
 import type { ReviewAssignment, TeacherBlockAssignment } from "../../shared/types";
@@ -91,6 +92,14 @@ export async function getAssignmentsByTeacher(
   return rows.map((r) => toReviewAssignment(r));
 }
 
+async function groupedLegacyQuestion(db: DbAdapter, examId: number, blockId: string): Promise<number | null> {
+  if (process.env.PROJECTX_LEGACY_ONLY !== "1" || examId !== 22) return null;
+  const row = await db.get<{block_title:string|null}>(
+    "SELECT block_title FROM answer_block_crops WHERE exam_id=? AND block_id=? LIMIT 1",examId,blockId);
+  const match = /^第(\d+)题$/.exec(row?.block_title || "");
+  return match ? Number(match[1]) : null;
+}
+
 /** 批量创建分配（年级组长操作） */
 export async function createAssignments(
   examId: number,
@@ -99,14 +108,31 @@ export async function createAssignments(
   userId: number,
   db: DbAdapter = getMysqlDb()
 ): Promise<ReviewAssignment[]> {
-  // 获取该考试的全部学生
+  // PDF subjective tasks exist before objective recognition or student_scores.
+  // Allocate only students with a crop for this question block.
   const studentRows = await db.all(
-    `SELECT DISTINCT ss.student_id
-     FROM student_scores ss
-     WHERE ss.exam_id = ?
-     ORDER BY ss.student_id`,
-    examId
+    process.env.PROJECTX_LEGACY_ONLY === "1"
+      ? `SELECT DISTINCT student_id FROM answer_block_crops
+         WHERE exam_id=? AND block_id=? AND student_id IS NOT NULL
+           AND source_type='legacy_pdf'
+         ORDER BY student_id`
+      : `SELECT DISTINCT ss.student_id FROM student_scores ss
+         WHERE ss.exam_id=? ORDER BY ss.student_id`,
+    examId, ...(process.env.PROJECTX_LEGACY_ONLY === "1" ? [blockId] : [])
   ) as Array<{ student_id: number }>;
+  if (process.env.PROJECTX_LEGACY_ONLY === "1") {
+    const active = await db.get(
+      `SELECT COUNT(*) n FROM answer_block_crops
+       WHERE exam_id=? AND block_id=? AND source_type='legacy_pdf'
+         AND (claimed_by IS NOT NULL OR status IN ('claimed','reviewed','disputed'))`,
+      examId, blockId
+    ) as {n:number};
+    if (Number(active?.n)) {
+      const error = new Error("本题已有领取或评分记录，不能覆盖分配；请先处理已领取任务") as Error & {status:number};
+      error.status=409;throw error;
+    }
+  }
+
   const allStudentIds = studentRows.map((r) => r.student_id);
 
   const totalRequested = Array.from(teacherCounts.values()).reduce((a, b) => a + b, 0);
@@ -118,7 +144,13 @@ export async function createAssignments(
   const distribution = randomDistribute(allStudentIds, teacherCounts, seed);
 
   const assignments: ReviewAssignment[] = [];
-  await db.transaction(async (tx) => {
+  await db.transactionWithNamedLock("review_assign_"+examId+"_"+blockId,5000,async (tx) => {
+    if(process.env.PROJECTX_LEGACY_ONLY === "1"){
+      const groupedNumber = await groupedLegacyQuestion(tx,examId,blockId);
+      if (groupedNumber != null) await assertLegacyQuestionNotGrouped(tx,examId,groupedNumber);
+      const locked=await tx.all("SELECT claimed_by,status FROM answer_block_crops WHERE exam_id=? AND block_id=? AND source_type='legacy_pdf' FOR UPDATE",examId,blockId) as Array<{claimed_by:number|null;status:string}>;
+      if(locked.some(x=>x.claimed_by!=null||["claimed","reviewed","disputed"].includes(x.status))){const error=new Error("本题已有领取或评分记录，不能覆盖分配") as Error & {status:number};error.status=409;throw error;}
+    }
     // 先删除旧分配
     await tx.run("DELETE FROM review_assignments WHERE exam_id = ? AND block_id = ?", examId, blockId);
 
@@ -230,6 +262,12 @@ export async function rebalanceWorkload(
   }
 
   await db.transaction(async (tx) => {
+    const groupedNumber = await groupedLegacyQuestion(tx,examId,blockId);
+    if (groupedNumber != null) {
+      const active = await readReviewGroups(tx,examId,true);
+      if (active.some(g=>g.mode!=="draft"&&g.questions.includes(groupedNumber)))
+        throw Object.assign(new Error("此题已合并阅卷，不能重新分配"), {status:409});
+    }
     for (const w of working) {
       await tx.run(
         "UPDATE review_assignments SET assigned_student_ids = ?, student_count = ?, auto_assigned = ? WHERE id = ?",
@@ -247,7 +285,14 @@ export async function deleteAssignment(
   assignmentId: number,
   db: DbAdapter = getMysqlDb()
 ): Promise<void> {
-  await db.run("DELETE FROM review_assignments WHERE id = ?", assignmentId);
+  await db.transaction(async tx => {
+    const assignment = await tx.get<{exam_id:number;block_id:string}>(
+      "SELECT exam_id,block_id FROM review_assignments WHERE id=? FOR UPDATE",assignmentId);
+    if (!assignment) return;
+    const groupedNumber = await groupedLegacyQuestion(tx,Number(assignment.exam_id),assignment.block_id);
+    if (groupedNumber != null) await assertLegacyQuestionNotGrouped(tx,Number(assignment.exam_id),groupedNumber);
+    await tx.run("DELETE FROM review_assignments WHERE id = ?", assignmentId);
+  });
 }
 
 /** 获取教师可选的题块列表 */
@@ -262,10 +307,10 @@ export async function getAvailableBlocksForTeacher(
   if (!examRow?.card_id) return [];
 
   const cropBlocks = await db.all(
-    `SELECT DISTINCT block_id, block_title, block_type
+    `SELECT block_id, MAX(block_title) block_title, MAX(block_type) block_type
      FROM answer_block_crops
-     WHERE exam_id = ?
-     ORDER BY block_id`,
+     WHERE exam_id = ? GROUP BY block_id
+     ORDER BY MIN(segment_index), block_id`,
     examId
   ) as Array<{ block_id: string; block_title: string | null; block_type: string }>;
 
@@ -273,6 +318,13 @@ export async function getAvailableBlocksForTeacher(
   // getPermittedBlocks 在无任何分配/授予时返回 null（全部可见，向后兼容）。
   // 特权阅卷人（管理员/学年主任）不参与过滤，全部可见（L5 修复：避免伪造 user 丢失特权身份）。
   let blocks = cropBlocks;
+  if (process.env.PROJECTX_LEGACY_ONLY === "1" && examId === 22) {
+    const grouped = (await readActiveReviewGroups(db,examId)).flatMap(g=>g.questions);
+    blocks = blocks.filter(b=>{
+      const match=/^第(\d+)题$/.exec(b.block_title||"");
+      return !match || !grouped.includes(Number(match[1]));
+    });
+  }
   const isPrivileged = user ? isPrivilegedGrader(user as any) : false;
   if (!isPrivileged) {
     const permitted = await getPermittedBlocks({ id: teacherId } as any, examId);
@@ -301,9 +353,20 @@ export async function getAvailableBlocksForTeacher(
     reviewedMap = new Map(reviewedCounts.map(r => [r.block_id, r.cnt]));
   }
 
+  const legacyCounts = new Map<string,{total:number;remaining:number}>();
+  if (isPrivileged && process.env.PROJECTX_LEGACY_ONLY === "1") {
+    const counts = await db.all(
+      `SELECT block_id,COUNT(*) total,
+       SUM(CASE WHEN status IN ('ready','pending') THEN 1 ELSE 0 END) remaining
+       FROM answer_block_crops WHERE exam_id=? AND source_type='legacy_pdf' GROUP BY block_id`,
+      examId
+    ) as Array<{block_id:string;total:number;remaining:number}>;
+    for (const row of counts) legacyCounts.set(row.block_id,{total:Number(row.total),remaining:Number(row.remaining)});
+  }
   return blocks.map((block) => {
     const assignment = assignments.find((a) => a.blockId === block.block_id);
-    const totalCount = assignment?.studentCount ?? 0;
+    const legacyCount = !assignment ? legacyCounts.get(block.block_id) : undefined;
+    const totalCount = assignment?.studentCount ?? legacyCount?.total ?? 0;
     const reviewed = reviewedMap.get(block.block_id) ?? 0;
 
     return {
@@ -312,7 +375,7 @@ export async function getAvailableBlocksForTeacher(
       blockType: block.block_type,
       totalCount,
       assignedToMe: totalCount,
-      remainingForMe: Math.max(0, totalCount - reviewed),
+      remainingForMe: legacyCount?.remaining ?? Math.max(0, totalCount - reviewed),
       isSelected: assignments.some((a) => a.blockId === block.block_id),
       questions: []
     };

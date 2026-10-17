@@ -3,8 +3,10 @@
 // 行为与迁移前完全一致：API 端点、请求体、路由与权限判断零改动。
 import { CalendarDays, CalendarX2, ClipboardList, FileText, Layers, Megaphone, Plus, Search, Trash2, UserRoundPlus, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import {useLocation,useNavigate} from "react-router-dom";
 import { fetchJson } from "../auth/api";
 import { useWorkspace } from "../WorkspaceContext";
+import {ExamPdfProgressCard,useExamPdfProgress,legacyPdfEnabled} from "../components/ExamPdfProgressPanel";
 import { ExamDetailPage } from "../components/ExamDetailPage";
 import { ExamAnswerKeyPanel } from "../components/ExamAnswerKeyPanel";
 import { useIsMobile } from "../hooks/useMediaQuery";
@@ -131,7 +133,18 @@ export function ExamManagePage() {
     onStartReview,
   } = useWorkspace();
 
+  const location=useLocation(),navigate=useNavigate();
+  useEffect(()=>{
+    const examId=Number(new URLSearchParams(location.search).get("examId"));
+    if(!Number.isSafeInteger(examId)||examId<1)return;
+    let active=true;
+    void fetchJson<ExamRecord>(`/api/exams/${examId}`).then(()=>{if(active)setSelectedExamId(examId)}).catch(e=>{if(active)setStatus(e.message||"无权访问该考试")});
+    return()=>{active=false};
+  },[location.search,user?.id]);
   const active = mode === "exam-manage";
+  const pdfProgress=useExamPdfProgress(exams.map(e=>e.id),active&&!selectedExamId&&examManageMode==="single");
+  const canSummary=legacyPdfEnabled&&(user?.role_name==="admin"||user?.teacher_role==="grade_leader");
+  function openExam(examId:number,tab="review"){setSelectedExamId(examId);navigate(`/exam-manage?examId=${examId}&tab=${tab}`);}
   const teacherId = user?.id ?? 0;
   const teacherRole = user?.teacher_role ?? null;
   const userRole = user?.role_name ?? "";
@@ -541,8 +554,10 @@ export function ExamManagePage() {
                   {exam.show_original_paper === 1 && <Badge tone="info" className="shrink-0">原卷开放</Badge>}
                 </div>
               </div>
+              {legacyPdfEnabled&&<div className="mt-3">{pdfProgress.data[exam.id]?<ExamPdfProgressCard compact progress={pdfProgress.data[exam.id]}/>:<span className="text-xs text-muted-foreground">{pdfProgress.error||"加载中…"}</span>}</div>}
               <div className="mt-3 flex flex-wrap justify-end gap-2">
-                <Button variant="ghost" size="sm" className="text-info-foreground" onClick={() => setSelectedExamId(exam.id)}>网阅</Button>
+                <Button variant="ghost" size="sm" className="text-info-foreground" onClick={() => openExam(exam.id)}>开始阅卷</Button>
+                    {canSummary&&<Button variant="ghost" size="sm" onClick={()=>openExam(exam.id,"summary")}>逐题汇总</Button>}
                 <Button variant="ghost" size="sm" className="text-info-foreground" icon={<Users />} onClick={() => void openRosterModal(exam)}>应考名单</Button>
                 <Button variant="ghost" size="sm" className="text-info-foreground" icon={<FileText />} onClick={() => setAnswerKeyExam(exam)}>原卷答案</Button>
                 <Button variant="ghost" size="sm" className="text-destructive-fg" onClick={() => setExamDeleteTarget({ exams: [exam], deleteLinkedCards: false })}>删除</Button>
@@ -578,6 +593,7 @@ export function ExamManagePage() {
               <TableHead className="min-w-40">考试名称</TableHead>
               <TableHead className="w-20">科目</TableHead>
               <TableHead className="w-28">答题卡</TableHead>
+              {legacyPdfEnabled&&<TableHead className="min-w-48">客观题处理</TableHead>}
               <TableHead className="w-20">状态</TableHead>
               <TableHead className="w-72 text-right">操作</TableHead>
             </TableRow>
@@ -602,6 +618,7 @@ export function ExamManagePage() {
                 </TableCell>
                 <TableCell className="text-muted-foreground">{exam.subject || "—"}</TableCell>
                 <TableCell className="text-xs text-muted-foreground">{exam.card_id ?? "未关联"}</TableCell>
+                {legacyPdfEnabled&&<TableCell>{pdfProgress.data[exam.id]?<ExamPdfProgressCard compact progress={pdfProgress.data[exam.id]}/>:<span className="text-xs text-muted-foreground">{pdfProgress.error||"加载中…"}</span>}</TableCell>}
                 <TableCell>
                   <div className="flex items-center gap-1.5">
                     <ExamStatusBadge status={toExamStatus(exam.status)} label={examStatusLabel(exam.status)} />
@@ -613,7 +630,8 @@ export function ExamManagePage() {
                 </TableCell>
                 <TableCell className="text-right whitespace-nowrap">
                   <div className="flex justify-end gap-1">
-                    <Button variant="ghost" size="sm" className="text-info-foreground" onClick={() => setSelectedExamId(exam.id)}>网阅</Button>
+                    <Button variant="ghost" size="sm" className="text-info-foreground" onClick={() => openExam(exam.id)}>开始阅卷</Button>
+                    {canSummary&&<Button variant="ghost" size="sm" onClick={()=>openExam(exam.id,"summary")}>逐题汇总</Button>}
                     <Button variant="ghost" size="sm" className="text-info-foreground" icon={<Users />} onClick={() => void openRosterModal(exam)}>应考名单</Button>
                     <Button variant="ghost" size="sm" className="text-info-foreground" icon={<FileText />} onClick={() => setAnswerKeyExam(exam)}>原卷答案</Button>
                     <Button variant="ghost" size="sm" className="text-destructive-fg" onClick={() => setExamDeleteTarget({ exams: [exam], deleteLinkedCards: false })}>删除</Button>
@@ -639,7 +657,7 @@ export function ExamManagePage() {
     <div className={cn("min-h-full w-full overflow-auto bg-background", !active && "hidden")}>
       {selectedExamId ? (
         <section className="min-h-full w-full">
-          <ExamDetailPage examId={selectedExamId} teacherId={teacherId} teacherRole={teacherRole} userRole={userRole} onBackToList={() => setSelectedExamId(null)} onBackHome={() => switchMode("home")} onStartReview={onStartReview} />
+          <ExamDetailPage examId={selectedExamId} teacherId={teacherId} teacherRole={teacherRole} userRole={userRole} onBackToList={() => {setSelectedExamId(null);navigate("/exam-manage",{replace:true});}} onBackHome={() => switchMode("home")} onStartReview={onStartReview} />
         </section>
       ) : (
         <section className="min-h-full w-full overflow-auto bg-background p-6">

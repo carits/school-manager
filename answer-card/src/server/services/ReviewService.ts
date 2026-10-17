@@ -154,6 +154,25 @@ async function loadBlockMaxScores(
     const maxScore = Number(row.maxScore ?? 0);
     if (Number.isFinite(maxScore)) maxScoreByBlock.set(row.blockId, maxScore);
   }
+  if (process.env.PROJECTX_LEGACY_ONLY === "1") {
+    // A generated PDF task is gradable before any question_scores row exists.
+    const legacy = await db.all(
+      `SELECT DISTINCT c.block_id, m.question_id, b.template_id
+       FROM answer_block_crops c JOIN legacy_pdf_marks m ON m.crop_id=c.id
+       JOIN legacy_pdf_papers p ON p.id=m.paper_id
+       JOIN legacy_pdf_batches b ON b.id=p.batch_id
+       WHERE c.exam_id=? AND c.source_type='legacy_pdf'`, examId
+    ) as Array<{block_id:string;question_id:string;template_id:string}>;
+    // Do not sort thousands of repeated full template JSON documents in SQL.
+    const ids = [...new Set(legacy.map(row => row.template_id))];
+    const templates = ids.length ? await db.all<{id:string;definition_json:string}>(
+      `SELECT id,definition_json FROM legacy_pdf_templates WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids) : [];
+    const definitions = new Map(templates.map(t => [t.id, JSON.parse(t.definition_json).questions as Array<{questionId:string;maxScore:number}>]));
+    for (const row of legacy) {
+      const question = definitions.get(row.template_id)?.find(q => q.questionId === row.question_id);
+      if (question) maxScoreByBlock.set(row.block_id,Number(question.maxScore));
+    }
+  }
   return maxScoreByBlock;
 }
 
@@ -274,6 +293,8 @@ export async function submitReviewCropScores(params: {
   userId: number;
   /** 题块总分模式（#187）：整个题块的合计分，后端按比例拆分到各小题 */
   blockTotalScore?: number;
+  /** Current legacy PDF mark version for optimistic concurrency on edits. */
+  expectedVersion?: number;
   /** Issue #174: 管理员提交他人已领取试卷时放行（一般由强制释放流程处理） */
   isAdmin?: boolean;
 }, db: DbAdapter = getMysqlDb()): Promise<ReviewSubmitResult> {
@@ -283,6 +304,7 @@ export async function submitReviewCropScores(params: {
     params.examId
   ) as CropRow | undefined;
   if (!crop) throw new Error("作答切块不存在");
+  if ((crop as any).source_type === "legacy_pdf") return (await import("./LegacyPdfService")).submitLegacyCropScore(params,db);
   if (!crop.student_id) throw new Error("该切块未关联学生，无法阅卷");
 
   // Issue #174: 已领取的试卷只能由领取人提交（管理员除外），防止并发冲突覆盖

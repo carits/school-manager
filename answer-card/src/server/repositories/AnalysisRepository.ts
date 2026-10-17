@@ -1,3 +1,4 @@
+import {readLegacyReviewGroupExport} from "../services/LegacyReviewGroupScoreService";
 import { getMysqlDb } from "../db";
 import type { DbAdapter } from "../db";
 import { EXAM_NOT_SOFT_DELETED_SQL, GROUP_MEMBER_NOT_SOFT_DELETED_SQL } from "../../apps/answer-card/server/middleware";
@@ -1441,7 +1442,9 @@ export class AnalysisRepository {
     const memberships = await this.db.all(`SELECT ss.student_id, u.student_number, u.name, ss.total_score, ss.objective_score, ss.subjective_score, c.name as class_name, c.id as class_id FROM student_scores ss JOIN users u ON u.id = ss.student_id ${examClassJoin("ss.student_id", "ss.exam_id")} LEFT JOIN classes c ON c.id = ${examClassId()} LEFT JOIN grades g ON g.id = c.grade_id WHERE ss.exam_id = ? ORDER BY ss.total_score DESC, ss.student_id ASC,${DISPLAY_CLASS_ORDER}`, examId) as any[];
     if (memberships.length === 0) return { students: [], questionHeaders: [] };
     const questionList = await this.db.all(`SELECT question_number, score_type, MAX(max_score) as max_score FROM question_scores WHERE exam_id = ? GROUP BY question_number, score_type ORDER BY question_number`, examId) as any[];
-    const qHeaders = questionList.map((q: any) => String(q.question_number));
+    const groupExport = await readLegacyReviewGroupExport(this.db, examId);
+    if (groupExport) await (await import("../services/LegacyPdfService")).assertLegacyScoresReady(this.db,examId);
+    const qHeaders = groupExport ? groupExport.questions.map(q=>q.title||q.number) : questionList.map((q: any) => String(q.question_number));
     const allQS = await this.db.all(`SELECT student_id, question_number, score FROM question_scores WHERE exam_id = ?`, examId) as any[];
     const qsLookup = new Map<number, Map<number, number>>();
     for (const qs of allQS) { if (!qsLookup.has(qs.student_id)) qsLookup.set(qs.student_id, new Map()); qsLookup.get(qs.student_id)!.set(qs.question_number, qs.score); }
@@ -1464,7 +1467,7 @@ export class AnalysisRepository {
       const seen = new Set<number>();
       filtered = graded.filter((s: R) => { if (seen.has(s.student_id)) return false; seen.add(s.student_id); return true; });
     }
-    return { students: filtered.map((s: any) => ({ className: s.class_name ?? "未知班级", studentNumber: s.student_number ?? "", name: s.name ?? "", totalScore: s.total_score, classRank: s.classRank, gradeRank: s.gradeRank, objectiveScore: s.objective_score, subjectiveScore: s.subjective_score, questionScores: questionList.map((q: any) => { const m = qsLookup.get(s.student_id); if (!m) return ""; const sc = m.get(q.question_number); return sc !== undefined ? sc : ""; }) })), questionHeaders: qHeaders };
+    return { students: filtered.map((s: any) => ({ className: s.class_name ?? "未知班级", studentNumber: s.student_number ?? "", name: s.name ?? "", totalScore: s.total_score, classRank: s.classRank, gradeRank: s.gradeRank, objectiveScore: s.objective_score, subjectiveScore: s.subjective_score, questionScores: groupExport ? groupExport.questions.map(q=>groupExport.rows.find(r=>r.studentId===Number(s.student_id))?.scores[q.number]??"") : questionList.map((q: any) => { const m = qsLookup.get(s.student_id); if (!m) return ""; const sc = m.get(q.question_number); return sc !== undefined ? sc : ""; }) })), questionHeaders: qHeaders };
   }
 
   async getScoreTableData(examId: number, classId?: number, displayMode: "deviation" | "zscore" | "percentile" = "deviation"): Promise<any> {

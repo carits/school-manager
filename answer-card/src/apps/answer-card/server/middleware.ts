@@ -127,7 +127,16 @@ export async function getVisibleExamIds(user: express.Request["user"]): Promise<
       ...params
     );
     // #246：学科教师同样受权限矩阵查看标志约束（此前提前返回导致矩阵失效）
-    return await withQuizExamIds(await filterExamsByViewRestrictions(db, user.id, rows.map((r) => r.id)));
+    // Explicit block assignments grant entry to classless cohort-wide formal exams.
+    // Per-block and per-student authorization is still checked at the grading routes.
+    const assignedRows = await db.all<{ id: number }>(
+      `SELECT DISTINCT e.id FROM review_assignments ra JOIN exams e ON e.id = ra.exam_id
+       WHERE ra.teacher_id = ? AND ${EXAM_NOT_SOFT_DELETED_SQL}`,
+      user.id
+    );
+    const visible = new Set(rows.map((r) => r.id));
+    for (const row of assignedRows) visible.add(row.id);
+    return await withQuizExamIds(await filterExamsByViewRestrictions(db, user.id, Array.from(visible)));
   }
 
   // 普通教师（无 teacher_role，不属任何精细分支）：同样消费权限矩阵的查看禁止行。

@@ -1,0 +1,13 @@
+import assert from "node:assert/strict";
+import {legacyGenerationReadiness} from "../../src/shared/legacyGenerationReadiness";
+const def:any={pages:[{pageRole:"front"},{pageRole:"back"}],questions:[{questionId:"q1",displayNumber:"1",gradingType:"objective",pageRole:"front",answer:null},{questionId:"q7",displayNumber:"7",gradingType:"teacher_score",regions:[{pageRole:"back"}]}]};
+const ready:any={id:"p1",sheet_no:1,student_id:1,identity_status:"confirmed",ownership_confirmed:1,pages:[{page_role:"back",status:"recognized"}],results:[]};
+assert.equal(legacyGenerationReadiness(def,[ready]).ready,true);
+assert.deepEqual(legacyGenerationReadiness(def,[ready]).missingKeys,["1"]);
+const unbound={...ready,id:"p2",identity_status:"wait_confirm"};const partial=legacyGenerationReadiness(def,[ready,unbound]);assert.equal(partial.ready,true);assert.equal(partial.readyCount,1);assert.deepEqual(partial.eligibleIds,["p1"]);
+assert.equal(legacyGenerationReadiness(def,[{...ready,pages:[]}]).pagePending,1);
+assert.equal(legacyGenerationReadiness(def,[{...ready,pages:[...ready.pages,...ready.pages]}]).ready,false);
+assert.equal(legacyGenerationReadiness(def,[{...ready,pages:[{page_role:"back",status:"wait_alignment"}]}]).ready,false);
+assert.equal(legacyGenerationReadiness(def,[]).ready,false);
+assert.equal(ready.results.length,0);assert.equal(ready.identity_status,"confirmed");
+console.log("unrecognized objectives and missing keys do not block; partial batch and required subjective pages verified");

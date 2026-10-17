@@ -91,10 +91,11 @@ function execRecognizer(exePath: string, args: string[]): Promise<RecognitionRes
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let timedOut = false;
+    const timeoutMs = Number(process.env.PROJECTX_RECOGNIZER_TIMEOUT_MS ?? 120_000);
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill();
-    }, 30_000);
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
@@ -107,7 +108,7 @@ function execRecognizer(exePath: string, args: string[]): Promise<RecognitionRes
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
       if (timedOut) {
-        reject(new Error("Native recognizer timed out after 30000ms."));
+        reject(new Error(`Native recognizer timed out after ${timeoutMs}ms.`));
         return;
       }
 

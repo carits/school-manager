@@ -9,7 +9,7 @@ interface Props {
   maxScore: number;
   /** 本题块是否含 0.5 小数（v1.9.4） */
   hasHalfPoint: boolean;
-  currentScore: number;
+  currentScore: number | null;
   /** 中间选值（用于预览，不自动提交） */
   onScoreChange: (score: number) => void;
   /** 选满即提交并自动跳下一页（v1.9.4 自动跳转） */
@@ -83,12 +83,13 @@ export function ScorePad({ maxScore, hasHalfPoint, currentScore, onScoreChange, 
   };
 
   // 位置模式当前选中的各位值
-  const tens = Math.floor(currentScore / 10) * 10;
-  const ones = Math.round(currentScore) - tens;
-  const half = currentScore % 1 >= 0.49 ? 0.5 : 0;
+  const editingScore = currentScore ?? 0;
+  const tens = Math.floor(editingScore / 10) * 10;
+  const ones = Math.floor(editingScore) - tens;
+  const half = editingScore % 1 >= 0.49 ? 0.5 : 0;
 
   const isSelected = (col: number, val: number) => {
-    if (!usePositionMode) return false;
+    if (!usePositionMode || currentScore === null) return false;
     if (col === 0) return tens === val;
     if (col === 1) return Math.round(ones) === val;
     if (col === positionColumns.length - 1) return half === val;
@@ -100,17 +101,17 @@ export function ScorePad({ maxScore, hasHalfPoint, currentScore, onScoreChange, 
     const lastCol = positionColumns.length - 1;
     if (col === lastCol) {
       // 末位（十分位）→ 合成完整分值并提交（自动跳）
-      const base = Math.floor(currentScore);
+      const base = Math.floor(editingScore);
       commit(round(base + val));
       return;
     }
     // 十位 / 个位 → 仅更新预览
     if (col === 0) {
-      const frac = currentScore - Math.floor(currentScore / 10) * 10;
+      const frac = editingScore - Math.floor(editingScore / 10) * 10;
       onScoreChange(Math.min(round(val + frac), maxScore));
     } else {
-      const newTens = Math.floor(currentScore / 10) * 10;
-      const frac = currentScore % 1 >= 0.49 ? 0.5 : 0;
+      const newTens = Math.floor(editingScore / 10) * 10;
+      const frac = editingScore % 1 >= 0.49 ? 0.5 : 0;
       onScoreChange(Math.min(round(newTens + val + frac), maxScore));
     }
   };
@@ -121,9 +122,11 @@ export function ScorePad({ maxScore, hasHalfPoint, currentScore, onScoreChange, 
         <p className="mb-2 text-sm text-muted-foreground">
           满分 <span className="tabular-nums">{maxScore}</span> 分 · 位值输入
         </p>
-        <div className="mb-3 flex gap-2">
+        <div className="mb-3 flex flex-col gap-2">
           {positionColumns.map((col, colIdx) => (
-            <div key={colIdx} className="flex flex-1 flex-col gap-2">
+            <div key={colIdx}>
+              <p className="mb-1 text-xs text-muted-foreground">{["十位", "个位", "小数位 · 点击提交"][colIdx]}</p>
+              <div className="grid grid-cols-5 gap-1.5">
               {col.map((btn, btnIdx) => (
                 <button
                   key={btnIdx}
@@ -131,11 +134,12 @@ export function ScorePad({ maxScore, hasHalfPoint, currentScore, onScoreChange, 
                   onClick={() => handlePositionClick(colIdx, btn.value)}
                   disabled={disabled}
                   aria-pressed={isSelected(colIdx, btn.value)}
-                  className={padBtnClass(isSelected(colIdx, btn.value), disabled)}
+                  className={cn(padBtnClass(isSelected(colIdx, btn.value), disabled), "min-h-11 min-w-0 text-lg")}
                 >
                   {btn.label}
                 </button>
               ))}
+              </div>
             </div>
           ))}
         </div>
@@ -150,52 +154,25 @@ export function ScorePad({ maxScore, hasHalfPoint, currentScore, onScoreChange, 
       <p className="mb-2 text-sm text-muted-foreground">
         满分 <span className="tabular-nums">{maxScore}</span> 分 · 点击即定分
       </p>
-      <div className="mb-3 grid grid-cols-[repeat(auto-fill,minmax(64px,1fr))] gap-2">
-        {enumMain.map((btn, idx) => (
-          <button
-            key={idx}
-            type="button"
-            onClick={() => commit(btn.value)}
-            disabled={disabled}
-            className={padBtnClass(false, disabled)}
-          >
+      <div className="mb-3 grid grid-cols-[repeat(auto-fill,minmax(48px,1fr))] gap-2 min-[900px]:grid-cols-[repeat(auto-fill,minmax(64px,1fr))]">
+        {[...enumBottom, ...enumMain].map((btn, idx) => (
+          <button key={idx} type="button" onClick={() => commit(btn.value)}
+            disabled={disabled} className={cn(padBtnClass(false, disabled, btn.value === 0), "min-h-11 min-w-0 text-xl")}>
             {btn.label}
           </button>
         ))}
       </div>
-
-      {enumBottom.length > 0 && (
-        <>
-          <div className="mt-1 mb-3 h-px bg-border-subtle" />
-          <p className="mb-1.5 text-xs text-muted-foreground">
-            极低分（空白 / 近空白卷）请显式点选：
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {enumBottom.map((btn, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => commit(btn.value)}
-                disabled={disabled}
-                className={cn(padBtnClass(false, disabled, true), "min-h-13")}
-              >
-                {btn.label}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
 
       <ScorePreview currentScore={currentScore} />
     </div>
   );
 }
 
-function ScorePreview({ currentScore }: { currentScore: number }) {
+function ScorePreview({ currentScore }: { currentScore: number | null }) {
   return (
     <div className="py-2 text-center text-3xl font-medium tabular-nums text-foreground">
-      {currentScore % 1 > 0 ? currentScore.toFixed(1) : currentScore}
-      <span className="text-base text-muted-foreground"> 分</span>
+      {currentScore === null ? "—" : currentScore % 1 > 0 ? currentScore.toFixed(1) : currentScore}
+      {currentScore !== null && <span className="text-base text-muted-foreground"> 分</span>}
     </div>
   );
 }

@@ -28,9 +28,13 @@ function cleanLabels(value: unknown, fallback: string[], max: number): string[] 
 
 export function normalizeCardProfile(profile: unknown): CardProfile {
   const raw = profile && typeof profile === "object" ? profile as Record<string, unknown> : {};
-  const preset = raw.preset === "hn_regular" || raw.preset === "hn_standard" || raw.preset === "survey_matrix"
+  const preset = raw.preset === "hn_regular" || raw.preset === "hn_standard" || raw.preset === "survey_matrix" || raw.preset === "external"
     ? raw.preset
     : "classic";
+  if (preset === "external") {
+    // 外部模板原样保留（结构校验在导入 API 处完成），此处只负责透传。
+    return { preset, externalTemplate: raw.externalTemplate };
+  }
   if (preset !== "survey_matrix") return { preset };
   const survey = raw.survey && typeof raw.survey === "object" ? raw.survey as Record<string, unknown> : {};
   return {

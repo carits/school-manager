@@ -1,0 +1,7 @@
+ARG ORIGINAL_IMAGE
+FROM ${ORIGINAL_IMAGE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3-opencv tesseract-ocr tesseract-ocr-chi-sim zbar-tools && rm -rf /var/lib/apt/lists/*
+USER 10001:10001
+ENTRYPOINT ["node"]
+CMD ["dist/server/index.mjs"]

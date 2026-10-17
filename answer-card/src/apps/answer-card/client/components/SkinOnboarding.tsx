@@ -15,7 +15,7 @@ import { cn } from "../lib/utils";
 import { SKIN_CHOSEN_KEY, writeLocalSkin } from "./SkinSwitcher";
 
 /** 一次性引导标志：标记设备已走过首次皮肤选择，避免每次刷新重复弹窗 */
-export const SKIN_ONBOARDED_KEY = "projectx-skin-onboarded";
+export const SKIN_ONBOARDED_KEY = (import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-skin-onboarded' : 'projectx-skin-onboarded') : 'projectx-skin-onboarded');
 
 /** 预览图（置于 public/，构建后以根路径引用） */
 const FLAT_PREVIEW = "/skin-onboarding-assets/flat-preview.png";

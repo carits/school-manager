@@ -389,7 +389,7 @@ export function ReviewAssignPage({ examId }: Props) {
                   <Table>
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
-                        <TableHead>学生</TableHead>
+                        <TableHead>流水号</TableHead><TableHead>姓名</TableHead><TableHead>学号</TableHead>
                         <TableHead>状态</TableHead>
                         <TableHead>领取人</TableHead>
                         <TableHead>领取时间</TableHead>
@@ -400,9 +400,8 @@ export function ReviewAssignPage({ examId }: Props) {
                     <TableBody>
                       {poolData.entries.map((entry) => (
                         <TableRow key={entry.id}>
-                          <TableCell>
-                            {entry.studentName ?? entry.studentNumber ?? `学生${entry.studentId ?? ""}`}
-                          </TableCell>
+                          <TableCell className="font-semibold">{entry.serialNumber??"—"}</TableCell>
+                          <TableCell>{entry.studentName??"待绑定"}</TableCell><TableCell>{entry.studentNumber??"—"}</TableCell>
                           <TableCell>{statusBadge(entry.status)}</TableCell>
                           <TableCell>{entry.claimedByName ?? "—"}</TableCell>
                           <TableCell>{entry.claimedAt ? new Date(entry.claimedAt).toLocaleString() : "—"}</TableCell>

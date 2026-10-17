@@ -1,3 +1,4 @@
+import { visibleLegacyPdfCards,assertLegacyObjectiveIdle,initLegacyPdf,legacyTemplateRouter,legacyBatchRouter,createLegacyBatch,nativePdfTemplate} from "../../../server/services/LegacyPdfService";
 import { databaseTimestamp } from "../../../server/db/timestamp";
 import express from "express";
 import multer from "multer";
@@ -94,6 +95,9 @@ import reviewArbitrationRoutes from "../../../server/routes/review-arbitration";
 import reviewAnnotationsRoutes from "../../../server/routes/review-annotations";
 import blockGradingConfigRoutes from "../../../server/routes/block-grading-config";
 import reviewPoolRoutes from "../../../server/routes/review-pool";
+import legacyReviewGroupRoutes from "../../../server/routes/legacy-review-groups";
+import { ensureLegacyReviewGroupServiceSchema } from "../../../server/services/LegacyReviewGroupService";
+import reviewTaskRoutes from "../../../server/routes/review-tasks";
 import systemSettingsRoutes from "../../../server/routes/system-settings";
 import { startLlmClientSidecar, shutdownLlmClient } from "./llm-launcher";
 import dashboardRoutes from "../../../server/routes/dashboard";
@@ -124,6 +128,8 @@ import { applySubjectTemplate } from "../../../shared/cardTemplates";
 import { gradeCombinedRecognition, gradeObjectiveRecognition, normalizeObjectiveAnswerKey, normalizeObjectiveQuestions } from "../../../shared/grading";
 import { buildLayout } from "../../../shared/layout";
 import { normalizeCardProfile, surveyProfile, surveyQuestionNumber } from "../../../shared/cardPresets";
+import { validateExternalTemplate } from "../../../shared/externalTemplateTypes";
+import { buildExternalLayout } from "../../../shared/externalTemplate";
 import type {
   AnswerCard,
   CardSummary,
@@ -142,6 +148,8 @@ import { assertActiveClassScope } from "../../../server/services/activeClassScop
 import { parseIdentityMode } from "../../../shared/cardIdentity";
 import { recognizeAnswerCard, recognizeObjectiveAnswers } from "./recognition";
 import { createScannerRouter } from "./scanner/index";
+import { createWenjuanRouter } from "./wenjuan";
+
 import { makeScannerAuth } from "../../../server/middleware/scanner-auth";
 import { enforceScannerCardScope } from "../../../server/middleware/scanner-scope";
 
@@ -311,7 +319,7 @@ async function writeLayoutDocument(cardId: string, layout: LayoutDocument): Prom
 
 async function saveCardWithLayout(cardRepo: CardRepository, card: AnswerCard, createdBy?: number): Promise<AnswerCard> {
   const normalized = normalizeCard(card, card.id);
-  const layout = buildLayout(normalized);
+  const layout = buildLayoutForCard(normalized);
   const exists = await cardRepo.findById(normalized.id);
 
   let revision: number;
@@ -330,9 +338,23 @@ async function saveCardWithLayout(cardRepo: CardRepository, card: AnswerCard, cr
 
 async function prepareLayoutForCard(cardRepo: CardRepository, card: AnswerCard): Promise<string> {
   const normalized = normalizeCard(card, card.id);
-  const layout = buildLayout(normalized);
+  const layout = buildLayoutForCard(normalized);
   await writeLayoutDocument(normalized.id, layout);
   return layoutPath(normalized.id);
+}
+
+/** 外部模板卡直接用模板转换出的布局；系统卡走原排版管线。 */
+function buildLayoutForCard(card: AnswerCard): LayoutDocument {
+  if (card.profile?.preset === "external" && card.profile.externalTemplate) {
+    const { validateExternalTemplate } = require("../../../shared/externalTemplateTypes") as typeof import("../../../shared/externalTemplateTypes");
+    const { buildExternalLayout } = require("../../../shared/externalTemplate") as typeof import("../../../shared/externalTemplate");
+    const { template, errors } = validateExternalTemplate(card.profile.externalTemplate);
+    if (!template) {
+      throw new Error('外部答题卡模板配置无效：' + errors.map((e) => e.path + " " + e.message).join("；"));
+    }
+    return buildExternalLayout(card, template);
+  }
+  return buildLayout(card);
 }
 
 
@@ -405,6 +427,125 @@ async function renderPdfToPngs(pdfPath: string, outputDir: string): Promise<stri
   const rendered = await pages;
   if (rendered.length !== pageCount) throw new Error(`PDF 渲染页数不完整：期望 ${pageCount}，实际 ${rendered.length}`);
   return rendered;
+}
+
+/**
+ * 外部模板 PDF 阅卷（方案十九：现成答题卡扫描 PDF）：
+ *  - 逐页先用 front 布局识别：考号识别成功 => front 页
+ *  - 否则用 back 布局重识别（作文等切块在背面）=> back 页
+ *  - interleaved_duplex 配对：back 页归属其前最近的 front 页
+ *  - 无法归属的 back 页 / 双面都失败的页独立成失败行（hold for manual matching）
+ *  - 身份策略：外部卡无 PXAC 二维码，服务端强制 legacy 模式
+ */
+async function recognizeExternalPdfPages(params: {
+  card: AnswerCard;
+  cardId: string;
+  layoutPath: string;
+  layoutPageCount: number;
+  files: Array<{ path: string; originalname: string }>;
+  identityMode: "legacy";
+  dpi: number;
+  confidenceThreshold: number;
+  onFinished: () => void;
+}): Promise<CombinedGradingRow[]> {
+  const { card, cardId, layoutPath, layoutPageCount, files, identityMode, dpi, confidenceThreshold, onFinished } = params;
+
+  const recognizeOne = async (file: { path: string; originalname: string }, pageNumber: number): Promise<CombinedRecognitionResult> => {
+    const cropsDir = await createRecognitionCropTempDir(cardId);
+    const recognition = await recognizeAnswerCard({
+      identityMode,
+      imagePath: file.path,
+      layoutPath,
+      pageNumber,
+      dpi,
+      cropsDir
+    }) as CombinedRecognitionResult;
+    recognition.subjectiveQuestions = recognition.subjectiveQuestions ?? [];
+    return recognition;
+  };
+
+  const pageResults = await mapWithConcurrency(files, recognitionConcurrency(), async (file) => {
+    try {
+      const front = await recognizeOne(file, 1);
+      if (front.studentId?.status === "ok" && front.studentId.value) {
+        return { file, pageType: "front" as const, recognition: front };
+      }
+      // front 布局识别完成但没有考号：可能是背面页，用 back 布局重识别
+      if (layoutPageCount >= 2) {
+        try {
+          const back = await recognizeOne(file, 2);
+          if (back.status !== "failed") {
+            return { file, pageType: "back" as const, recognition: back };
+          }
+        } catch {
+          // back 布局也失败：保留 front 结果（可能只是考号未涂，客观题仍可用）
+        }
+      }
+      return { file, pageType: "front" as const, recognition: front };
+    } catch (error) {
+      // front 布局彻底失败（如整页是背面且几何差异大）：再试 back
+      if (layoutPageCount >= 2) {
+        try {
+          const back = await recognizeOne(file, 2);
+          if (back.status !== "failed") {
+            return { file, pageType: "back" as const, recognition: back };
+          }
+        } catch { /* fallthrough */ }
+      }
+      return {
+        file,
+        pageType: "unknown" as const,
+        recognition: {
+          status: "failed",
+          imagePath: file.path,
+          pageNumber: 1,
+          message: error instanceof Error ? error.message : String(error),
+          questions: [],
+          subjectiveQuestions: []
+        } as CombinedRecognitionResult
+      };
+    } finally {
+      onFinished();
+    }
+  });
+
+  const rows: CombinedGradingRow[] = [];
+  const groups: Array<{ front: CombinedGradingRow; rows: CombinedGradingRow[] }> = [];
+  for (const page of pageResults) {
+    const row = {
+      ...gradeCombinedRecognition(card, page.file.originalname, page.recognition, confidenceThreshold),
+      previewUrl: gradingPreviewUrl(cardId, page.file.path),
+      actualPath: page.file.path
+    } as CombinedGradingRow & { actualPath: string };
+    if (page.pageType === "front") {
+      groups.push({ front: row, rows: [row] });
+    } else if (page.pageType === "back") {
+      const last = groups[groups.length - 1];
+      if (last) {
+        last.rows.push(row);
+      } else {
+        // 无前置正面页：按草案 onAmbiguousOwnership=hold_for_manual_matching 保留为失败行
+        rows.push({
+          ...row,
+          recognitionStatus: "failed",
+          recognition: { ...row.recognition, status: "failed", message: "背面页无法配对：前面没有可归属的正面页" }
+        });
+      }
+    } else {
+      rows.push(row);
+    }
+  }
+  // 每组合并成一行：背面行继承正面 studentId，让 mergePdfRows 按学生合并
+  for (const group of groups) {
+    if (group.rows.length === 1) {
+      rows.push(group.rows[0]);
+      continue;
+    }
+    const sid = group.front.studentId;
+    const mergedInput = sid ? group.rows.map((r) => (r.studentId ? r : { ...r, studentId: sid })) : group.rows;
+    rows.push(...mergePdfRows(mergedInput));
+  }
+  return rows;
 }
 
 function mergePdfRows(rows: CombinedGradingRow[]): CombinedGradingRow[] {
@@ -779,6 +920,7 @@ export async function createApp(): Promise<express.Express> {
   // 信任最近一跳让登录限速等拿到真实客户端 IP（可用 PROJECTX_TRUST_PROXY=0 关闭）。
   app.set("trust proxy", process.env.PROJECTX_TRUST_PROXY === "0" ? false : 1);
 
+  if(process.env.PROJECTX_LEGACY_ONLY==="1"&&(process.env.PROJECTX_MARIADB_HOST!=="legacy-old-db"||process.env.PROJECTX_MARIADB_DATABASE!=="school_manager_legacy"))throw new Error("旧模块拒绝连接受保护的生产数据库");
   console.log("[Server] 正在初始化数据库...");
   initializeDatabase();
   // 确保连接池在使用前已创建（MariaDB 模式下 initMariadbSchema / ensureDefaultAdmin 依赖）
@@ -798,13 +940,14 @@ export async function createApp(): Promise<express.Express> {
     const raw = Number(process.env.PROJECTX_SCAN_RETENTION_DAYS);
     return Number.isFinite(raw) && raw >= 1 ? raw : 30;
   })();
-  const cleanupTimer = scheduleCleanup(24, cleanupRetainDays);
+  const cleanupTimer = process.env.PROJECTX_LEGACY_ONLY === "1" ? setTimeout(() => {}, 0) : scheduleCleanup(24, cleanupRetainDays);
   cleanupTimer.unref();
   // 每周考试审计：每日刷新当前周与上周的晨测组（懒加载 ensure 为主，定时兜底成员漂移）
-  scheduleWeeklyAuditRefresh();
+  if (process.env.PROJECTX_LEGACY_ONLY !== "1") scheduleWeeklyAuditRefresh();
   // 仅启动时清理一次上次进程残留的 AI 任务（不可放在每次创建任务的路径里，否则会把正在执行的任务误标为失败）
-  await cleanupInterruptedAiJobs();
+  if(process.env.PROJECTX_LEGACY_ONLY!=="1") await cleanupInterruptedAiJobs();
   await ensureDataDirs();
+  await initLegacyPdf();
   console.log("[Server] 数据库初始化完成");
 
 // P0-4 (C-S2): 鉴权默认开启，仅显式设置 0/false 才关闭（向后兼容开发环境）。
@@ -933,6 +1076,18 @@ export async function createApp(): Promise<express.Express> {
   app.use("/api/auth", authRoutes);
   // 强制改密账号的自助认证端点已在上方处理；其它 API 一律拒绝。
   app.use("/api", requirePasswordChangeCompleted);
+
+  // 独立的评教评学问卷入口：复用本系统账号，但文件、任务和导出数据存放在
+  // data/answer-card/wenjuan 下，不写入考试/答题卡业务表。
+
+  if (process.env.PROJECTX_LEGACY_ONLY === "1") {
+    app.use("/api/templates", authMiddleware, legacyTemplateRouter());
+    app.use("/api/scan-batches", authMiddleware, legacyBatchRouter());
+    await ensureLegacyReviewGroupServiceSchema();
+    app.use("/api/review-groups", authMiddleware, legacyReviewGroupRoutes);
+  } else {
+    app.use("/api/review-tasks", authMiddleware, reviewTaskRoutes());
+  }
 
   // ── 用户自身设置（无需管理员权限） ──
   // GET  /api/users/me/settings — 读取当前用户设置
@@ -1105,8 +1260,8 @@ export async function createApp(): Promise<express.Express> {
   app.use("/api/users", userRoutes);
   app.use("/api/classes", classRoutes);
   app.use("/api/teachers", teacherRoutes);
-  app.use("/api/export", exportRoutes);
   app.use("/api/export", exportScoresRoutes);
+  app.use("/api/export", exportRoutes);
   app.use("/api/exam-groups", examGroupRoutes);
   app.use("/api/scores", scoreRoutes);
   app.use("/api/sponsor", sponsorRoutes);
@@ -1347,6 +1502,12 @@ export async function createApp(): Promise<express.Express> {
         }
       }
 
+      if(process.env.PROJECTX_LEGACY_ONLY==="1"){
+        let t=await getMysqlDb().get<{id:string}>("SELECT id FROM legacy_pdf_templates WHERE card_id=? AND status='published' ORDER BY revision DESC LIMIT 1",cardId);
+        if(!t&&examIdValue)t={id:await nativePdfTemplate(req,card)};
+        if(!t||!examIdValue){res.status(409).json({message:"请在自定义PDF阅卷页面选择已发布模板及关联考试"});await rm(uploaded.path,{force:true});return;}
+        const result=await createLegacyBatch(req,uploaded,t.id,Number(examIdValue));await rm(uploaded.path,{force:true});res.status(202).json(result);return;
+      }
       const jobId = `pdf_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
       const now = new Date().toISOString();
       const job: PdfGradingJob = {
@@ -1373,7 +1534,8 @@ export async function createApp(): Promise<express.Express> {
           emitGradingProgress({ type: "start", batchId: jobId, finished: 0, total: renderedPages.length });
           const currentLayoutPath = await prepareLayoutForCard(cardRepo, card);
           const confidenceThreshold = await resolveConfidenceThreshold(req);
-          const layoutPageCount = buildLayout(card).pages.length;
+          const isExternalCard = card.profile?.preset === "external" && Boolean(card.profile.externalTemplate);
+          const layoutPageCount = buildLayoutForCard(card).pages.length;
           const uploadDir = path.join(dataDir, "recognition", "uploads", cardId);
           await mkdir(uploadDir, { recursive: true });
           const gradingFiles = [] as Array<{ path: string; originalname: string }>;
@@ -1382,7 +1544,23 @@ export async function createApp(): Promise<express.Express> {
             await copyFile(renderedPages[index], target);
             gradingFiles.push({ path: target, originalname: `${jobId}_${index + 1}.png` });
           }
-          const rows = await mapWithConcurrency(gradingFiles, recognitionConcurrency(), async (file, fileIndex) => {
+          const rows = isExternalCard
+            ? await recognizeExternalPdfPages({
+                card,
+                cardId,
+                layoutPath: currentLayoutPath,
+                layoutPageCount,
+                files: gradingFiles,
+                identityMode: "legacy",
+                dpi: parseRecognitionDpi(req.body.dpi || req.query.dpi),
+                confidenceThreshold,
+                onFinished: () => {
+                  job.finished += 1;
+                  job.updatedAt = new Date().toISOString();
+                  emitGradingProgress({ type: "progress", batchId: jobId, finished: job.finished, total: job.total });
+                }
+              })
+            : await mapWithConcurrency(gradingFiles, recognitionConcurrency(), async (file, fileIndex) => {
             const expectedPage = fileIndex % layoutPageCount + 1;
             try {
               const cropsDir = await createRecognitionCropTempDir(cardId);
@@ -1420,7 +1598,7 @@ export async function createApp(): Promise<express.Express> {
               emitGradingProgress({ type: "progress", batchId: jobId, finished: job.finished, total: job.total });
             }
           });
-          const groupedRows = mergePdfRows(rows);
+          const groupedRows = isExternalCard ? rows : mergePdfRows(rows);
           const result: CombinedGradingBatchResult = {
             batchId: jobId,
             cardId,
@@ -1447,7 +1625,11 @@ export async function createApp(): Promise<express.Express> {
     }
   });
 
-  app.get("/api/grading/jobs/:jobId", (req, res) => {
+  app.get("/api/grading/jobs/:jobId", async (req, res) => {
+    if(process.env.PROJECTX_LEGACY_ONLY==="1"){
+      const b=await getMysqlDb().get<any>("SELECT * FROM legacy_pdf_batches WHERE id=?",String(req.params.jobId));
+      if(b){if(!await validateExamIdsAccess(req,res,[b.exam_id]))return;res.json({jobId:b.id,status:["ready","marking","finished"].includes(b.status)?"done":b.status==="failed"?"error":"processing",total:b.total,finished:b.finished,error:b.error,requiresConfirmation:true,reviewUrl:"/answer-card/custom-pdf/?batch="+b.id});return;}
+    }
     const job = pdfGradingJobs.get(safeId(paramValue(req.params.jobId)));
     if (!job) {
       res.status(404).json({ message: "批阅任务不存在" });
@@ -1522,7 +1704,7 @@ export async function createApp(): Promise<express.Express> {
 
   app.get("/api/cards", async (_req, res, next) => {
     try {
-      res.json((await cardRepo.listCards()).map(toCardSummary));
+      res.json((await visibleLegacyPdfCards(await cardRepo.listCards())).map(toCardSummary));
     } catch (error) {
       next(error);
     }
@@ -1667,7 +1849,7 @@ export async function createApp(): Promise<express.Express> {
         res.status(404).json({ message: "答题卡不存在" });
         return;
       }
-      const layout = buildLayout(card);
+      const layout = buildLayoutForCard(card);
       await writeLayoutDocument(card.id, layout);
       res.json(layout);
     } catch (error) {
@@ -2101,8 +2283,7 @@ export async function createApp(): Promise<express.Express> {
         review_round: number | null;
         claimed_by: number | null;
       } | undefined;
-      const targetPath = cropRow?.image_path ?? await getAnswerBlockCropFile(cropId);
-      if (!cropRow || !targetPath || !existsSync(targetPath)) {
+      if (!cropRow) {
         res.status(404).json({ message: "作答切块图片不存在" });
         return;
       }
@@ -2124,23 +2305,29 @@ export async function createApp(): Promise<express.Express> {
           res.status(403).json({ message: "权限不足" });
           return;
         }
-        if (await isExamSoftDeleted(examId)) {
+        const blockId = String(cropRow.block_id ?? "");
+        // These authorization reads are independent. Running them together
+        // keeps every scope check while shortening the image request path.
+        const [deleted, visibleIds, blockAllowed, assignedIds] = await Promise.all([
+          isExamSoftDeleted(examId),
+          getVisibleExamIds(req.user),
+          blockId ? canGradeBlock(req.user, examId, blockId) : Promise.resolve(true),
+          getAssignedStudentIdSet(examId, blockId, Number(req.user.id)),
+        ]);
+        if (deleted) {
           res.status(404).json({ message: "作答切块图片不存在" });
           return;
         }
-        const visibleIds = await getVisibleExamIds(req.user);
         if (visibleIds !== null && !visibleIds.includes(examId)) {
           res.status(403).json({ message: "权限不足：无权访问此考试" });
           return;
         }
-        const blockId = String(cropRow.block_id ?? "");
-        if (blockId && !(await canGradeBlock(req.user, examId, blockId))) {
+        if (blockId && !blockAllowed) {
           res.status(403).json({ message: "权限不足：你未被分配批改该题块" });
           return;
         }
         // 逐生分配下仍按可阅范围收敛图片：未开评的切片外卷子读不到原图；
         // 一旦离开首评队列（待二评/争议/已评完）本块教师都可回看，与领取/清单同一谓词
-        const assignedIds = await getAssignedStudentIdSet(examId, blockId, Number(req.user.id));
         if (!isClaimableForAssignedSet(
           {
             studentId: cropRow.student_id,
@@ -2153,8 +2340,17 @@ export async function createApp(): Promise<express.Express> {
           return;
         }
       }
+      // Legacy PDF crops are derived lazily; resolve only after scope checks.
+      const targetPath = await getAnswerBlockCropFile(cropId);
+      if (!targetPath || !existsSync(targetPath)) {
+        res.status(404).json({ message: "作答切块图片不存在" });
+        return;
+      }
       res.setHeader("Content-Type", "image/png");
-      res.sendFile(targetPath);
+      // The grading UI preloads the next image. A short private cache keeps
+      // that preloaded copy available when the teacher advances.
+      res.setHeader("Cache-Control", "private, max-age=60");
+      res.sendFile(targetPath, { cacheControl: false });
     } catch (error) {
       next(error);
     }
@@ -2362,6 +2558,116 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // POST: 导入答题卡
+  /** 外部答题卡模板导入（方案十九）：接收草案 JSON，生成 preset=external 的答题卡。 */
+  app.post("/api/cards/external-template", express.json({ limit: "2mb" }), async (req, res, next) => {
+    try {
+      const { template: templateInput, title, subject, subjectLabel, examDate } = req.body ?? {} as Record<string, unknown>;
+      const { template, errors } = validateExternalTemplate(templateInput);
+      if (!template) {
+        res.status(400).json({ message: "外部答题卡模板配置无效", errors });
+        return;
+      }
+      const finalTitle = String(title ?? template.title ?? "外部答题卡").trim().slice(0, 120);
+      if (!finalTitle) {
+        res.status(400).json({ message: "标题不能为空" });
+        return;
+      }
+      const finalSubject = String(subject ?? "语文").trim().slice(0, 40);
+      const dateStr = String(examDate ?? "").trim();
+      if (dateStr && !isValidExamDate(dateStr)) {
+        res.status(400).json({ message: "考试时间格式无效" });
+        return;
+      }
+
+      // 题目结构：客观题 → objective block（逐题 score，answerKey 留空 = missing_key）
+      //           主观题 → subjective block（每题 plain_box，无 scoreCells → 全部进阅卷池）
+      const objectiveQuestions = template.questions.filter((q) => q.gradingType === "objective");
+      const subjectiveQuestions = template.questions.filter((q) => q.gradingType === "teacher_score");
+      const numberFromQuestionId = (qid: string) => {
+        const m = /(\d+)\s*$/.exec(String(qid));
+        return m ? Number(m[1]) : 0;
+      };
+
+      const objBlock = objectiveQuestions.length > 0 ? {
+        id: "ext_obj",
+        type: "objective" as const,
+        title: "客观题",
+        questionStart: Math.min(...objectiveQuestions.map((q) => numberFromQuestionId(q.questionId)).filter(Boolean)),
+        questionCount: objectiveQuestions.length,
+        optionCount: Math.max(...objectiveQuestions.map((q) => (q.options ?? []).length)),
+        mode: "multiple" as const,
+        scorePerQuestion: 2,
+        density: "normal" as const,
+        questions: objectiveQuestions.map((q) => ({
+          questionNumber: numberFromQuestionId(q.questionId),
+          mode: (q.options ?? []).length > 4 || (q.answer ?? []).length > 1 ? ("multiple" as const) : ("single" as const),
+          optionCount: (q.options ?? []).length,
+          score: q.maxScore,
+          answerKey: [] as string[]
+        }))
+      } : null;
+
+      const subjBlock = subjectiveQuestions.length > 0 ? {
+        id: "ext_subj",
+        type: "subjective" as const,
+        title: "主观题",
+        questions: subjectiveQuestions.map((q, i) => ({
+          id: q.questionId,
+          number: numberFromQuestionId(q.questionId) || i + 1,
+          score: q.maxScore,
+          style: "plain_subjective" as const,
+          kind: "plain_box" as const,
+          minHeightMm: 60
+        }))
+      } : null;
+
+      const identityLength = template.identity.length ?? 6;
+      const cardId = generateCardId(finalSubject + "_ext");
+      const card: AnswerCard = {
+        id: cardId,
+        title: finalTitle,
+        subject: finalSubject,
+        ...(subjectLabel ? { subjectLabel: String(subjectLabel).slice(0, 40) } : {}),
+        ...(dateStr ? { examDate: dateStr } : {}),
+        paper: { size: "A3", orientation: "landscape" },
+        studentInfo: {
+          studentNumberDigits: identityLength,
+          showName: false,
+          showClass: false,
+          showSeat: false,
+          showExamNumber: true,
+          showNotes: false
+        } as AnswerCard["studentInfo"],
+        bodyBlocks: [objBlock, subjBlock].filter(Boolean) as AnswerCard["bodyBlocks"],
+        sided: "double",
+        layoutVersion: 1,
+        profile: { preset: "external", externalTemplate: template },
+        updatedAt: new Date().toISOString()
+      };
+
+      // 布局合法性提前验证：转换失败立刻报错，不落库半成品
+      const layout = buildExternalLayout(card, template);
+      if (layout.pages.length === 0) {
+        res.status(400).json({ message: "模板未产出任何可识别页面" });
+        return;
+      }
+      const warnings = layout.warnings.filter((w) => w.includes("未产出"));
+      if (warnings.length > 0) {
+        res.status(400).json({ message: warnings.join("；") });
+        return;
+      }
+
+      // 同名检查
+      if (await cardRepo.findByTitle(finalTitle)) {
+        res.status(409).json({ message: `已存在同名答题卡「${finalTitle}」` });
+        return;
+      }
+      const saved = await saveCardWithLayout(cardRepo, card, req.user?.id);
+      res.status(201).json({ card: saved });
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/cards/import", async (req, res, next) => {
     try {
       const imported = req.body as {
@@ -2998,6 +3304,7 @@ export async function createApp(): Promise<express.Express> {
         res.status(409).json({ message: "考试尚未进入阅卷阶段，无法公布成绩" });
         return;
       }
+      await assertLegacyObjectiveIdle(db,examId);
       // 幂等：已公布直接返回，不重复写审计事件
       if (exam.score_published === 1) {
         res.json({ ok: true, scorePublished: 1, showOriginalPaper: exam.show_original_paper === 1 ? 1 : 0 });
@@ -3008,6 +3315,9 @@ export async function createApp(): Promise<express.Express> {
       // 状态更新与审计日志在同一事务中保证原子性；
       // WHERE 带状态条件，防止校验与写入之间考试被并发改回阅卷中（TOCTOU）
       await db.transaction(async (tx) => {
+        await tx.get("SELECT id FROM exams WHERE id=? FOR UPDATE",examId);
+        await assertLegacyObjectiveIdle(tx,examId);
+        await assertScoresPublishable(tx,exam);
         const result = await tx.run(
           "UPDATE exams SET score_published = 1, show_original_paper = COALESCE(?, show_original_paper), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('grading', 'closed') AND (score_published IS NULL OR score_published <> 1)",
           showOriginalPaper, examId
@@ -3483,7 +3793,7 @@ export async function startServer(port = Number(process.env.PORT ?? 5174)): Prom
       // 安全（R05）：答题卡插图导入/上传档位
       console.log(`[card-asset-limits] ${describeCardAssetLimits()}`);
       logWechatSubscriptionStatus();
-      startLlmClientSidecar();
+      if (process.env.PROJECTX_LEGACY_ONLY !== "1") startLlmClientSidecar();
       const shutdown = () => {
         shutdownLlmClient();
         server.close(() => process.exit(0));

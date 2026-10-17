@@ -1,4 +1,5 @@
 import express from "express";
+import { randomBytes } from "node:crypto";
 import type { Request, Response } from "express";
 import { authMiddleware, requirePermission } from "../middleware/auth";
 import { requireExamAccess, makeViewPermissionGate } from "../../apps/answer-card/server/middleware";
@@ -6,9 +7,27 @@ import { PERMISSIONS } from "../auth/permissions";
 import { getMysqlDb, buildUpsertSQL } from "../db";
 import XLSX from "xlsx";
 import { AnalysisRepository } from "../repositories/AnalysisRepository";
+import { readLegacyReviewGroupExport } from "../services/LegacyReviewGroupScoreService";
 import type { ExportTemplate, ExportConfigRequest, ScoreTableRow } from "../../shared/types";
 
 const router = express.Router();
+const exportTickets = new Map<string, { examId: number; config: ExportConfigRequest; expiresAt: number }>();
+const EXPORT_TICKET_TTL_MS = 5 * 60 * 1000;
+
+// Short-lived capability link lets a teacher open the XLSX in a system browser
+// when the WeChat webview blocks blob downloads. It contains no session secret.
+router.get("/download/:ticket", async (req: Request, res: Response) => {
+  const token = String(req.params.ticket ?? "");
+  const ticket = exportTickets.get(token);
+  if (!ticket || ticket.expiresAt <= Date.now()) {
+    exportTickets.delete(token);
+    res.status(410).json({ message: "下载链接已过期，请返回成绩分析重新生成" });
+    return;
+  }
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  await sendScoreWorkbook(ticket.examId, ticket.config, res);
+});
 router.use(authMiddleware);
 
 // ── 模板 CRUD ──────────────────────────────────────────
@@ -84,6 +103,39 @@ router.get("/columns", (_req: Request, res: Response) => {
   res.json({ columns: ALL_COLUMNS });
 });
 
+/** POST /api/export/exams/:examId/scores-ticket — 生成限时下载链接 */
+router.post(
+  "/exams/:examId/scores-ticket",
+  requireExamAccess,
+  makeViewPermissionGate("can_view_scores"),
+  makeViewPermissionGate("can_view_students"),
+  requirePermission(PERMISSIONS.GRADE_READ),
+  (req: Request, res: Response) => {
+    const examId = Number(req.params.examId);
+    const config = req.body as ExportConfigRequest;
+    if (!Number.isInteger(examId) || examId <= 0 || !Array.isArray(config?.columns) ||
+        config.columns.length === 0 || config.columns.length > 30 ||
+        config.columns.some(col => typeof col !== "string" || !Object.hasOwn(ALL_COLUMNS, col))) {
+      res.status(400).json({ message: "导出配置无效" });
+      return;
+    }
+    for (const [token, record] of exportTickets) {
+      if (record.expiresAt <= Date.now()) exportTickets.delete(token);
+    }
+    const ticket = randomBytes(32).toString("hex");
+    const expiresAt = Date.now() + EXPORT_TICKET_TTL_MS;
+    exportTickets.set(ticket, { examId, config: {
+      examId,
+      columns: [...config.columns],
+      classId: config.classId,
+      sideTableN: config.sideTableN,
+      gapCols: config.gapCols
+    }, expiresAt });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ticket, expiresAt });
+  }
+);
+
 /** POST /api/export/exams/:examId/scores — 按配置导出 Excel
  *  评审 P1：导出表同时含分数与姓名/考号（名单），须叠加 can_view_scores 与
  *  can_view_students 双查看门 —— 任一维度被管理员关闭即禁止整表导出，
@@ -95,9 +147,13 @@ router.post(
   makeViewPermissionGate("can_view_students"),
   requirePermission(PERMISSIONS.GRADE_READ),
   async (req: Request, res: Response) => {
+    await sendScoreWorkbook(Number(req.params.examId), req.body as ExportConfigRequest, res);
+  }
+);
+
+async function sendScoreWorkbook(examId: number, config: ExportConfigRequest, res: Response): Promise<void> {
   try {
-    const examId = Number(req.params.examId);
-    const { columns, classId, sideTableN, gapCols } = req.body as ExportConfigRequest;
+    const { columns, classId, sideTableN, gapCols } = config;
 
     if (!columns || columns.length === 0) {
       res.status(400).json({ message: "请至少选择一列" });
@@ -112,14 +168,20 @@ router.post(
       hasAssignedScore: boolean;
     };
 
+    // Formal English grades are keyed by the exam's serial number, including exports without sub-scores.
+    const groupedExport = process.env.PROJECTX_LEGACY_ONLY === "1" && examId === 22
+      ? await readLegacyReviewGroupExport(db, examId) : null;
+    const serialByStudent = new Map(groupedExport?.rows.filter(r=>r.studentId!=null)
+      .map(r=>[r.studentId!,r.serialNumber] as const) ?? []);
+
     // Determine if we need sub-scores
     const needObjSub = columns.includes("objectiveSubScores");
     const needSubjSub = columns.includes("subjectiveSubScores");
 
     // Fetch question definitions and scores if needed
-    let objQuestionDefs: Array<{ questionNumber: number; maxScore: number }> = [];
-    let subQuestionDefs: Array<{ questionNumber: number; maxScore: number }> = [];
-    let subScoreMap: Map<number, Map<number, number>> = new Map();
+    let objQuestionDefs: Array<{ questionNumber: string; maxScore: number; header?: string }> = [];
+    let subQuestionDefs: Array<{ questionNumber: string; maxScore: number; header?: string }> = [];
+    let subScoreMap: Map<number, Map<string, number>> = new Map();
 
     if (needObjSub || needSubjSub) {
       const allQs = await db.all(`
@@ -129,8 +191,8 @@ router.post(
         ORDER BY question_number
       `, examId) as Array<{ questionNumber: number; score_type: string; maxScore: number }>;
 
-      objQuestionDefs = allQs.filter((q) => q.score_type === "objective");
-      subQuestionDefs = allQs.filter((q) => q.score_type === "subjective");
+      objQuestionDefs = allQs.filter((q) => q.score_type === "objective").map(q => ({questionNumber:String(q.questionNumber),maxScore:Number(q.maxScore)}));
+      subQuestionDefs = allQs.filter((q) => q.score_type === "subjective").map(q => ({questionNumber:String(q.questionNumber),maxScore:Number(q.maxScore)}));
 
       const allSubScores = await db.all(`
         SELECT student_id as studentId, question_number as questionNumber, score
@@ -139,13 +201,34 @@ router.post(
 
       for (const s of allSubScores) {
         if (!subScoreMap.has(s.studentId)) subScoreMap.set(s.studentId, new Map());
-        subScoreMap.get(s.studentId)!.set(s.questionNumber, s.score);
+        subScoreMap.get(s.studentId)!.set(String(s.questionNumber), s.score);
+      }
+      // English temporary groups replace formal child columns; the old values remain labeled history.
+      const grouped = groupedExport;
+      if (grouped) {
+        objQuestionDefs = grouped.questions.filter(q=>q.kind==="objective").map(q=>({
+          questionNumber:q.number,maxScore:q.maxScore,header:`客观Q${q.number}(${q.maxScore}分)`
+        }));
+        subQuestionDefs = grouped.questions.filter(q=>q.kind==="teacher_score").map(q=>({
+          questionNumber:q.number,maxScore:q.maxScore,
+          header:q.groupId ? `${q.title||q.groupId}合并总分(${q.maxScore}分)` : `主观Q${q.number}(${q.maxScore}分)${q.historical?"（合并前历史）":""}`
+        }));
+        subScoreMap = new Map();
+        for (const paper of grouped.rows) {
+          if (paper.studentId == null) continue;
+          const values = new Map<string,number>();
+          for (const q of grouped.questions) {
+            const value = paper.scores[q.number];
+            if (value != null) values.set(q.number,value);
+          }
+          subScoreMap.set(paper.studentId,values);
+        }
       }
     }
 
     // Build headers dynamically
     const baseCols = columns.filter((c) => c !== "objectiveSubScores" && c !== "subjectiveSubScores");
-    const headers: string[] = [];
+    const headers: string[] = groupedExport ? ["流水号"] : [];
 
     for (const col of baseCols) {
       switch (col) {
@@ -168,17 +251,18 @@ router.post(
 
     // Add sub-score headers
     if (needObjSub) {
-      objQuestionDefs.forEach((q) => headers.push(`客观Q${q.questionNumber}(${q.maxScore}分)`));
+      objQuestionDefs.forEach((q) => headers.push(q.header ?? `客观Q${q.questionNumber}(${q.maxScore}分)`));
     }
     if (needSubjSub) {
-      subQuestionDefs.forEach((q) => headers.push(`主观Q${q.questionNumber}(${q.maxScore}分)`));
+      subQuestionDefs.forEach((q) => headers.push(q.header ?? `主观Q${q.questionNumber}(${q.maxScore}分)`));
     }
 
     // Build data rows
     const data: Record<string, string | number | null>[] = [];
 
     for (const row of rows) {
-      const exportRow: Record<string, string | number | null> = {};
+      const exportRow: Record<string, string | number | null> = groupedExport
+        ? {"流水号":serialByStudent.get(row.studentId) ?? null} : {};
 
       for (const col of baseCols) {
         switch (col) {
@@ -207,14 +291,14 @@ router.post(
       if (needObjSub) {
         const scoreMap = subScoreMap.get(row.studentId);
         objQuestionDefs.forEach((q) => {
-          const key = `客观Q${q.questionNumber}(${q.maxScore}分)`;
+          const key = q.header ?? `客观Q${q.questionNumber}(${q.maxScore}分)`;
           exportRow[key] = scoreMap?.get(q.questionNumber) ?? "";
         });
       }
       if (needSubjSub) {
         const scoreMap = subScoreMap.get(row.studentId);
         subQuestionDefs.forEach((q) => {
-          const key = `主观Q${q.questionNumber}(${q.maxScore}分)`;
+          const key = q.header ?? `主观Q${q.questionNumber}(${q.maxScore}分)`;
           exportRow[key] = scoreMap?.get(q.questionNumber) ?? "";
         });
       }
@@ -277,6 +361,6 @@ router.post(
   } catch (error) {
     res.status(500).json({ message: error instanceof Error ? error.message : "导出失败" });
   }
-});
+}
 
 export default router;

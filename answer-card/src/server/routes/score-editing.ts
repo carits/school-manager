@@ -28,6 +28,7 @@ import {
 } from "../../apps/answer-card/server/middleware";
 import { PERMISSIONS } from "../auth/permissions";
 import { markScoreMutated } from "../services/examPublishEvents";
+import { readReviewGroups } from "../services/LegacyReviewGroupScoreService";
 import {
   objectiveQuestionDefinitions,
   gradeObjectiveQuestion,
@@ -315,6 +316,10 @@ router.put(
   const updates = updatesRaw as Array<{ questionNumber: number; scoreType: string; score: number }>;
 
   const db = getMysqlDb();
+  if (process.env.PROJECTX_LEGACY_ONLY === "1" && examId === 22 && (await readReviewGroups(db, examId)).some(g => g.mode !== "draft")) {
+    res.status(409).json({ message: "英语46–60题已合并阅卷，请在自定义PDF和整组阅卷入口修改" });
+    return;
+  }
   const userId = req.user!.id;
   const now = databaseTimestamp();
 
@@ -341,7 +346,12 @@ router.put(
   }
 
   let assignedScoreWarning: string | undefined;
+  let groupedBlocked = false;
   await db.transaction(async (tx) => {
+    if (process.env.PROJECTX_LEGACY_ONLY === "1" && examId === 22 && (await readReviewGroups(tx, examId, true)).some(g => g.mode !== "draft")) {
+      groupedBlocked = true;
+      return;
+    }
     let scoresChanged = false;
     for (const u of updates) {
       const existing = await tx.get(
@@ -398,6 +408,10 @@ router.put(
     }
   });
 
+  if (groupedBlocked) {
+    res.status(409).json({ message: "合并阅卷已启用，请刷新后从整组阅卷入口修改" });
+    return;
+  }
   // 分析结果缓存精准失效（建议 6）
   analysisCache.invalidateExam(examId);
 
@@ -486,6 +500,10 @@ router.put(
   const answerUpdates = answerUpdatesRaw as Record<string, string[]>;
 
   const db = getMysqlDb();
+  if (process.env.PROJECTX_LEGACY_ONLY === "1" && examId === 22 && (await readReviewGroups(db, examId)).some(g => g.mode !== "draft")) {
+    res.status(409).json({ message: "英语46–60题已合并阅卷，请在自定义PDF和整组阅卷入口修改" });
+    return;
+  }
   const userId = req.user!.id;
   const now = databaseTimestamp();
 
@@ -538,7 +556,12 @@ router.put(
   const upsertSQL = buildUpsertSQL(db.dialect, "question_scores", upsertCols, conflictCols, updateCols);
 
   let assignedScoreWarning: string | undefined;
+  let groupedBlocked = false;
   await db.transaction(async (tx) => {
+    if (process.env.PROJECTX_LEGACY_ONLY === "1" && examId === 22 && (await readReviewGroups(tx, examId, true)).some(g => g.mode !== "draft")) {
+      groupedBlocked = true;
+      return;
+    }
     // 答案与重算同事务：任一步失败整体回滚，避免“答案已改但分数未重算”的半更新状态
     await cardRepo.updateCardInTx(card, tx);
 
@@ -640,6 +663,10 @@ router.put(
     }
   });
 
+  if (groupedBlocked) {
+    res.status(409).json({ message: "合并阅卷已启用，请刷新后从整组阅卷入口修改" });
+    return;
+  }
   // 分析结果缓存精准失效（建议 6）
   analysisCache.invalidateExam(examId);
 

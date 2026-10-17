@@ -5,7 +5,7 @@ import { isAuthEnforced } from "../lib/authEnforce";
 import { isUrlCredentialAllowedPath } from "../lib/mediaAllowlist";
 import { resolveMediaTicket, revokeMediaTicketsForUser } from "../services/mediaTicket";
 
-export const AUTH_COOKIE_NAME = "projectx_auth_token";
+export const AUTH_COOKIE_NAME = process.env.PROJECTX_AUTH_COOKIE || "projectx_auth_token";
 
 // 强制鉴权判定统一委托给 isAuthEnforced()（server/lib/authEnforce.ts），
 // 与 createApp 共用同一真相源，避免语义相反的 bug。

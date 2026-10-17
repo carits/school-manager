@@ -17,6 +17,7 @@ type CropRow = {
   exam_id: number | null;
   student_id: number | null;
   student_number: string | null;
+  student_name?: string | null;
   source_type: AnswerBlockCropSourceType;
   source_record_id: string;
   block_id: string;
@@ -229,6 +230,7 @@ export async function persistAnswerBlockCrops(
 }
 
 export async function getAnswerBlockCropFile(id: string, db: DbAdapter = getMysqlDb()): Promise<string | null> {
+  if(process.env.PROJECTX_LEGACY_ONLY==="1"){const mod=await import("./LegacyPdfService");const file=await mod.legacyCropImage(id);if(file)return file;}
   const row = await db.get("SELECT image_path FROM answer_block_crops WHERE id = ?", id) as { image_path: string } | undefined;
   return row?.image_path ?? null;
 }
@@ -287,8 +289,8 @@ export async function listReviewBlockCrops(
   }
 
   const rows = await db.all(
-    `SELECT abc.*
-     FROM answer_block_crops abc
+    `SELECT abc.*, u.name AS student_name
+     FROM answer_block_crops abc LEFT JOIN users u ON u.id=abc.student_id
      WHERE ${filters.join(" AND ")}
      ORDER BY abc.block_id, abc.student_number, abc.page_number, abc.segment_index`,
     ...values
@@ -326,13 +328,48 @@ async function withQuestionScores(rows: CropRow[], examId: number, db: DbAdapter
   const studentIds = Array.from(new Set(rows.map((row) => row.student_id).filter((id): id is number => id != null)));
   const scoresByStudent = new Map<number, Array<{ question_number: number; score: number | null; max_score: number | null }>>();
 
-  for (const studentId of studentIds) {
+  // Batch students instead of one SQL round trip per student. Chunk large exports.
+  for (let offset = 0; offset < studentIds.length; offset += 500) {
+    const ids = studentIds.slice(offset, offset + 500);
     const scores = await db.all(
-      "SELECT question_number, score, max_score FROM question_scores WHERE exam_id = ? AND student_id = ?",
-      examId,
-      studentId
-    ) as Array<{ question_number: number; score: number | null; max_score: number | null }>;
-    scoresByStudent.set(studentId, scores);
+      `SELECT student_id, question_number, score, max_score FROM question_scores
+       WHERE exam_id = ? AND student_id IN (${ids.map(() => "?").join(",")})`,
+      examId, ...ids
+    ) as Array<{ student_id: number; question_number: number; score: number | null; max_score: number | null }>;
+    for (const score of scores) {
+      const group = scoresByStudent.get(score.student_id) ?? [];
+      group.push(score); scoresByStudent.set(score.student_id, group);
+    }
+  }
+
+  // PDF task boundaries can differ from the generated design card's block IDs.
+  // Read the bound immutable PDF version once, rather than guessing its maximum from the design card.
+  const pdfMax = new Map<string, number>();
+  const pdfSerial = new Map<string, number>();
+  const pdfScores=new Map<string,number|null>();
+  if (process.env.PROJECTX_LEGACY_ONLY === "1") {
+    const ids = rows.filter(row => row.source_type === "legacy_pdf").map(row => row.id);
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const group = ids.slice(offset, offset + 500);
+      const refs = await db.all<{crop_id:string;question_id:string;template_id:string;serial_no:number|null;paper_score:number|null;paper_status:string}>(
+        `SELECT m.crop_id,m.question_id,b.template_id,s.serial_no,m.score paper_score,m.status paper_status FROM legacy_pdf_marks m
+         JOIN legacy_pdf_papers p ON p.id=m.paper_id JOIN legacy_pdf_batches b ON b.id=p.batch_id
+         LEFT JOIN legacy_paper_serials s ON s.paper_id=p.id AND s.exam_id=b.exam_id
+         WHERE m.crop_id IN (${group.map(() => "?").join(",")})`, ...group);
+      for(const ref of refs){if(ref.serial_no!=null)pdfSerial.set(ref.crop_id,Number(ref.serial_no));pdfScores.set(ref.crop_id,ref.paper_status==="reviewed"&&ref.paper_score!=null?Number(ref.paper_score):null);}
+      const templateIds = [...new Set(refs.map(x => x.template_id))];
+      if (!templateIds.length) continue;
+      const templates = await db.all<{id:string;definition_json:string}>(
+        `SELECT id,definition_json FROM legacy_pdf_templates WHERE id IN (${templateIds.map(() => "?").join(",")})`, ...templateIds);
+      const definitions = new Map(templates.map(t => {
+        try { return [t.id, JSON.parse(t.definition_json).questions as Array<{questionId:string;maxScore:number}>] as const; }
+        catch { return [t.id, [] as Array<{questionId:string;maxScore:number}>] as const; }
+      }));
+      for (const ref of refs) {
+        const q = definitions.get(ref.template_id)?.find(q => q.questionId === ref.question_id);
+        if (q && Number.isFinite(Number(q.maxScore))) pdfMax.set(ref.crop_id, Number(q.maxScore));
+      }
+    }
   }
 
   const halfMap = await blockHasHalfPointMap(examId, db);
@@ -340,7 +377,7 @@ async function withQuestionScores(rows: CropRow[], examId: number, db: DbAdapter
   let blockMaxMap: Map<string, number> | null = null;
   try {
     const exam = await db.get("SELECT card_id FROM exams WHERE id = ?", examId) as { card_id: string | null } | undefined;
-    if (exam?.card_id) {
+    if (exam?.card_id && rows.some(row => !pdfMax.has(row.id))) {
       const card = await new CardRepository().findById(exam.card_id);
       if (card) blockMaxMap = blockMaxScoreFromCard(card);
     }
@@ -359,6 +396,8 @@ async function withQuestionScores(rows: CropRow[], examId: number, db: DbAdapter
     } else if (blockMaxMap) {
       crop.maxScore = blockMaxMap.get(row.block_id) ?? crop.maxScore ?? 0;
     }
-    return crop;
+    if (pdfMax.has(row.id)) crop.maxScore = pdfMax.get(row.id)!;
+    if(pdfScores.has(row.id))crop.score=pdfScores.get(row.id)!;
+    return { ...crop, serialNumber:pdfSerial.get(row.id)??null, studentName: row.student_name ?? null };
   });
 }
