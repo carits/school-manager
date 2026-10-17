@@ -1,0 +1,22 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const dep=process.env.REVIEW_GROUP_TEST_MODULES||'/home/ecs-user/school-manager-answer-card/answer-card/node_modules';
+const ts=require(path.join(dep,'typescript'));
+const source=fs.readFileSync(path.join(__dirname,'../源码/apps/answer-card/client/util/reviewGroupImageCache.ts'),'utf8');
+const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const mod={exports:{}};vm.runInNewContext(js,{module:mod,exports:mod.exports,Map,Promise,Error,AbortController});
+const {createReviewImageCache}=mod.exports;
+const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject}};
+(async()=>{
+ const pending=deferred(),released=[];let calls=0;
+ const cache=createReviewImageCache(()=>{calls++;return pending.promise},u=>released.push(u));
+ const preview=cache.get('paper/1?signature=a');cache.setActive('paper/1?signature=a');const opened=cache.get('paper/1?signature=a');
+ assert.equal(preview,opened);await Promise.resolve();assert.equal(calls,1);pending.resolve('blob:1');assert.equal(await opened,'blob:1');assert.equal(await cache.get('paper/1?signature=a'),'blob:1');assert.equal(calls,1);
+ cache.clear();assert.deepEqual(released,['blob:1']);
+ const outstanding=deferred();const stale=createReviewImageCache(()=>outstanding.promise,u=>released.push(u));const old=stale.get('old');stale.clear();outstanding.resolve('blob:old');await assert.rejects(old);assert.ok(released.includes('blob:old'));
+ let tries=0;const retry=createReviewImageCache(async()=>{if(++tries===1)throw Error('network');return'blob:retry'},()=>{});await assert.rejects(retry.get('a'));assert.equal(await retry.get('a'),'blob:retry');assert.equal(tries,2);
+ const freed=[];const bounded=createReviewImageCache(async k=>'blob:'+k,u=>freed.push(u),2);bounded.setActive('a');await bounded.get('a');await bounded.get('b');await bounded.get('c');assert.ok(freed.includes('blob:b'));assert.ok(!freed.includes('blob:a'));assert.equal(await bounded.get('a'),'blob:a');
+ const versions=[];const versioned=createReviewImageCache(async k=>{versions.push(k);return'blob:'+k},()=>{});await versioned.get('paper?signature=old');await versioned.get('paper?signature=new');assert.equal(versions.length,2);
+ const evicted=[];const window=createReviewImageCache(async k=>'blob:'+k,u=>evicted.push(u));window.setActive('4');for(let n=1;n<=7;n++)await window.get(String(n));window.setActive('5');window.retain(['2','3','4','5','6','7','8']);await window.get('8');assert.deepEqual(evicted,['blob:1']);assert.equal(await window.get('5'),'blob:5');window.retain(['3','4','5','6','7','8','9']);assert.deepEqual(evicted,['blob:1','blob:2']);
+ const slow=deferred();let signal;const cancelled=createReviewImageCache((k,s)=>{signal=s;return slow.promise},u=>evicted.push(u));const dropping=cancelled.get('offscreen');await Promise.resolve();cancelled.retain([]);assert.equal(signal.aborted,true);slow.resolve('blob:offscreen');await assert.rejects(dropping);assert.ok(evicted.includes('blob:offscreen'));
+ console.log('PASS: in-flight dedup, cached reuse, retry, active image retention, cleanup, version isolation');
+})().catch(e=>{console.error(e);process.exitCode=1});

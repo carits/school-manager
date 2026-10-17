@@ -1,0 +1,34 @@
+name: 答题卡构建与回归
+on:
+  push:
+    branches: [main, 'codex/**']
+    paths: ['答题卡阅卷系统/**', '.github/workflows/答题卡检查.yml']
+  pull_request:
+    branches: [main]
+    paths: ['答题卡阅卷系统/**', '.github/workflows/答题卡检查.yml']
+jobs:
+  check:
+    name: 类型、构建与隔离阅卷回归
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 答题卡阅卷系统
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: 答题卡阅卷系统/package-lock.json
+      - name: 安装依赖
+        run: npm ci
+      - name: 类型检查
+        run: npm run typecheck
+      - name: 构建界面和服务
+        run: npm run build:web && npm run build:server
+      - name: 验证阅卷分组、缓存、汇总与流水号
+        run: |
+          node 脚本/verify-legacy-review-groups.cjs
+          node 脚本/verify-review-image-cache.cjs
+          node --experimental-vm-modules 脚本/verify-legacy-review-group-score.mjs
+          node 脚本/verify-legacy-paper-serials.cjs
