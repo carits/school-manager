@@ -8,7 +8,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { fetchJson, authFetch } from "../auth/api";
+import { fetchJson, authFetch, apiUrl } from "../auth/api";
 import { cn } from "../lib/utils";
 import {
   Button,
@@ -111,6 +111,7 @@ export function ExportModal({ examId, examName, classId, onClose }: Props) {
   const [activeTemplate, setActiveTemplate] = useState<number | null>(null);
   const [previewRows, setPreviewRows] = useState<Record<string, unknown>[]>([]);
   const [exporting, setExporting] = useState(false);
+  const [mobileDownloadUrl, setMobileDownloadUrl] = useState("");
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
@@ -205,20 +206,36 @@ export function ExportModal({ examId, examName, classId, onClose }: Props) {
 
   async function doExport() {
     setExporting(true);
+    setMobileDownloadUrl("");
     try {
+      const body = JSON.stringify({ examId, classId: classId ? Number(classId) : undefined, columns: selected, sideTableN: sideN, gapCols });
+      const isEmbeddedBrowser = /MicroMessenger|QQ\//i.test(navigator.userAgent);
+      if (isEmbeddedBrowser) {
+        const ticketResponse = await authFetch(`/api/export/exams/${examId}/scores-ticket`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body
+        });
+        if (!ticketResponse.ok) {
+          const error = await ticketResponse.json().catch(() => ({}));
+          throw new Error(error.message || `生成下载链接失败（${ticketResponse.status}）`);
+        }
+        const { ticket } = await ticketResponse.json() as { ticket: string };
+        setMobileDownloadUrl(new URL(apiUrl(`/api/export/download/${ticket}`), window.location.href).href);
+        return;
+      }
       const resp = await authFetch(`/api/export/exams/${examId}/scores`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ examId, classId: classId ? Number(classId) : undefined, columns: selected, sideTableN: sideN, gapCols })
+        method: "POST", headers: { "Content-Type": "application/json" }, body
       });
-      if (!resp.ok) throw new Error("导出失败");
+      if (!resp.ok) {
+        const error = await resp.json().catch(() => ({}));
+        throw new Error(error.message || `导出失败（${resp.status}）`);
+      }
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `${examName.replace(/[\/:*?"<>|]/g, "_")}_成绩表.xlsx`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       notify.success("成绩表已导出");
     } catch (err) {
       notify.error(err instanceof Error ? err.message : "导出失败");
@@ -526,6 +543,12 @@ export function ExportModal({ examId, examName, classId, onClose }: Props) {
           </div>
         </DialogBody>
 
+        {mobileDownloadUrl && (
+          <div className="border-t px-6 py-3 text-sm">
+            <a className="font-semibold text-primary underline" href={mobileDownloadUrl}>点击下载 Excel 文件</a>
+            <p className="mt-1 text-muted-foreground">若微信内无法保存，请长按上方链接复制地址，再到系统浏览器打开。链接5分钟内有效。</p>
+          </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={exporting}>
             取消

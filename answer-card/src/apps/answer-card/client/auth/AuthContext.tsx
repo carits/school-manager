@@ -7,8 +7,8 @@ import { ForcedPasswordChange } from "./ForcedPasswordChange";
 export type AppPersona = "student" | "teacher" | "teacher-scanner";
 export type TeacherRoleOverride = "subject_teacher" | "head_teacher" | "grade_leader" | null;
 
-const PERSONA_STORAGE_KEY = "projectx_persona";
-const TEACHER_ROLE_OVERRIDE_KEY = "projectx_teacher_role_override";
+const PERSONA_STORAGE_KEY = "legacy-old_persona";
+const TEACHER_ROLE_OVERRIDE_KEY = "legacy-old_teacher_role_override";
 
 function loadPersona(): AppPersona | null {
   try {
@@ -160,10 +160,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const onUnauthorized = () => {
       setUser(null);
       // 会话失效即视为登出：清除「会话内显式皮肤选择」标记，避免下一账号继承
-      try { sessionStorage.removeItem("projectx-skin-chosen"); } catch { /* ignore */ }
+      try { sessionStorage.removeItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-skin-chosen' : 'projectx-skin-chosen') : 'projectx-skin-chosen')); } catch { /* ignore */ }
     };
-    window.addEventListener("projectx:unauthorized", onUnauthorized);
-    return () => window.removeEventListener("projectx:unauthorized", onUnauthorized);
+    window.addEventListener((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old:unauthorized' : 'projectx:unauthorized') : 'projectx:unauthorized'), onUnauthorized);
+    return () => window.removeEventListener((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old:unauthorized' : 'projectx:unauthorized') : 'projectx:unauthorized'), onUnauthorized);
   }, []);
 
   const logout = useCallback(async () => {
@@ -179,7 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearMediaTicketCache();
     // 清除「会话内显式皮肤选择」标记（见 readus/SKIN-THEME.md §二）：
     // 共享设备上下一账号登录时以账号偏好为准，不继承上一账号的皮肤。
-    try { sessionStorage.removeItem("projectx-skin-chosen"); } catch { /* ignore */ }
+    try { sessionStorage.removeItem((import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-skin-chosen' : 'projectx-skin-chosen') : 'projectx-skin-chosen')); } catch { /* ignore */ }
   }, []);
 
   const hasPermission = useCallback(

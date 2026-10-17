@@ -5,7 +5,7 @@
 import { Router, type Request } from "express";
 import { requirePermission } from "../middleware/auth";
 import { PERMISSIONS } from "../auth/permissions";
-import { requireExamAccess, requireGradingScope, getPermittedBlocks } from "../../apps/answer-card/server/middleware";
+import { requireExamAccess, requireGradingScope, getPermittedBlocks, getVisibleExamIds } from "../../apps/answer-card/server/middleware";
 import { optionalPositiveNumber } from "../../apps/answer-card/server/helpers";
 import {
   listReviewBlockCropItems,
@@ -19,6 +19,82 @@ import type { ReviewSubmitScoreInput } from "../../shared/types";
 import { getMysqlDb } from "../db";
 
 const router = Router();
+// Old PDF exam progress is a separate read model; no recognition or score writes.
+router.get("/processing-progress", requirePermission(PERMISSIONS.GRADE_READ), async (req,res,next)=>{
+ try {
+  if(process.env.PROJECTX_LEGACY_ONLY!=="1")return res.status(404).json({message:"入口不存在"});
+  const raw=String(req.query.examIds||"").split(",").filter(Boolean);
+  if(raw.length>100||raw.some(v=>!/^\d+$/.test(v)||!Number.isSafeInteger(Number(v))||Number(v)<1))return res.status(400).json({message:"考试编号无效"});
+  const visible=await getVisibleExamIds(req.user);
+  const ids=[...new Set(raw.map(Number))].filter(id=>!visible||visible.includes(id));
+  const {readExamPdfProgress}=await import("../services/ExamPdfProgressService");
+  res.json({ok:true,data:await readExamPdfProgress(ids)});
+ } catch(error){next(error);}
+});
+router.get("/exams/:examId/processing-progress",requireExamAccess,requirePermission(PERMISSIONS.GRADE_READ),async(req,res,next)=>{
+ try{
+  if(process.env.PROJECTX_LEGACY_ONLY!=="1")return res.status(404).json({message:"入口不存在"});
+  const {readExamPdfProgress}=await import("../services/ExamPdfProgressService");
+  res.json({ok:true,data:(await readExamPdfProgress([Number(req.params.examId)]))[0]});
+ }catch(error){next(error);}
+});
+router.get("/exams/:examId/question-summary",requireExamAccess,requirePermission(PERMISSIONS.GRADE_READ),async(req,res,next)=>{
+ try{
+  if(process.env.PROJECTX_LEGACY_ONLY!=="1")return res.status(404).json({message:"入口不存在"});
+  if(Number(req.user?.role_id)!==1&&req.user?.teacher_role!=="grade_leader")return res.status(403).json({message:"仅管理员或学年主任可查看全卷逐题汇总"});
+  const page=Number(req.query.page||1),pageSize=Number(req.query.pageSize||50);
+  if(!Number.isSafeInteger(page)||page<1||!Number.isSafeInteger(pageSize)||pageSize<1||pageSize>100)return res.status(400).json({message:"分页参数无效"});
+  const {examQuestionSummary}=await import("../services/ExamPdfProgressService");
+  res.json({ok:true,data:await getMysqlDb().transaction(tx=>examQuestionSummary(Number(req.params.examId),{page,pageSize,search:String(req.query.search||"")},tx))});
+ }catch(error){next(error);}
+});
+
+// Administrator view of each teacher's actual grading progress in the legacy PDF exam.
+router.get("/exams/:examId/teacher-progress", requireExamAccess,
+  requirePermission(PERMISSIONS.GRADE_READ), async (req, res, next) => {
+    try {
+      if (process.env.PROJECTX_LEGACY_ONLY !== "1") return res.status(404).json({ message: "入口不存在" });
+      const user = req.user;
+      if (Number(user?.role_id) !== 1 && user?.teacher_role !== "grade_leader") {
+        return res.status(403).json({ message: "仅管理员或学年主任可查看教师阅卷进度" });
+      }
+      const examId = Number(req.params.examId);
+      const {readLegacyReviewGroupTeacherProgress}=await import("../services/LegacyReviewGroupService");
+      const data = await getMysqlDb().transaction(async tx => {
+      const groups=await readLegacyReviewGroupTeacherProgress(examId,tx);
+      const rows = await tx.all<{
+        teacherId: number; teacherName: string; blockId: string; blockTitle: string | null;
+        allocatedCount: number; assignedCount: number; scoredCount: number; claimedCount: number;
+      }>(
+        `SELECT ra.teacher_id AS teacherId, u.name AS teacherName,
+                ra.block_id AS blockId, MAX(c.block_title) AS blockTitle,
+                MAX(ra.student_count) AS allocatedCount,
+                COUNT(c.id) AS assignedCount,
+                COALESCE(SUM(CASE WHEN c.status='reviewed'
+                  AND m.score IS NOT NULL THEN 1 ELSE 0 END),0) AS scoredCount,
+                COALESCE(SUM(CASE WHEN c.claimed_by=ra.teacher_id THEN 1 ELSE 0 END),0) AS claimedCount
+         FROM review_assignments ra
+         JOIN users u ON u.id=ra.teacher_id
+         LEFT JOIN answer_block_crops c ON c.exam_id=ra.exam_id AND c.block_id=ra.block_id
+           AND c.source_type='legacy_pdf' AND c.student_id IS NOT NULL
+           AND JSON_CONTAINS(CASE WHEN JSON_VALID(ra.assigned_student_ids)
+             THEN ra.assigned_student_ids ELSE '[]' END, CAST(c.student_id AS CHAR))
+         LEFT JOIN legacy_pdf_marks m ON m.crop_id=c.id
+         WHERE ra.exam_id=?
+         GROUP BY ra.id,ra.teacher_id,u.name,ra.block_id
+         ORDER BY u.name,ra.block_id`, examId);
+      return [...rows.filter(row=>!groups.replacedBlockIds.has(row.blockId)).map(row => ({
+        ...row,
+        allocatedCount: Number(row.allocatedCount),
+        assignedCount: Number(row.assignedCount),
+        scoredCount: Number(row.scoredCount),
+        claimedCount: Number(row.claimedCount),
+      })),...groups.rows];
+      });
+      res.json({ ok: true, data });
+    } catch (error) { next(error); }
+  });
+
 
 /**
  * 当前调用者在这些题块内的逐生切片条件（PR #312 评审 B1）。
@@ -35,6 +111,55 @@ async function assignedSliceFor(
   if (!user || !blockIds) return null;
   return buildAssignedSliceClause(examId, Number(user.id), blockIds);
 }
+
+// Grading reference is exam-specific and restricted to the caller's grading block.
+router.get("/exams/:examId/blocks/:blockId/reference",
+  requireExamAccess, requirePermission(PERMISSIONS.GRADE_READ), requireGradingScope,
+  async (req, res, next) => {
+    try {
+      const examId = Number(req.params.examId), blockId = String(req.params.blockId);
+      const db = getMysqlDb();
+      const rows = await db.all<{ question_numbers: string }>(
+        "SELECT DISTINCT question_numbers FROM answer_block_crops WHERE exam_id=? AND block_id=?",
+        examId, blockId);
+      const numbers = new Set<number>();
+      for (const row of rows) {
+        try { for (const q of JSON.parse(row.question_numbers)) {
+          const n = Number(q); if (Number.isInteger(n) && n > 0) numbers.add(n);
+        } } catch { /* malformed historical metadata */ }
+      }
+      const questions = [...numbers].sort((a, b) => a - b);
+      const keys = questions.length ? await db.all<{question_number:number;answer_text:string}>(
+        `SELECT question_number,answer_text FROM exam_answer_keys WHERE exam_id=? AND question_number IN (${questions.map(() => "?").join(",")})`,
+        examId, ...questions) : [];
+      const { listAnswerKeyPages } = await import("../services/ExamPaperViewService");
+      res.json({ok:true,data:{
+        questions: questions.map(questionNumber => ({questionNumber,
+          answerText: keys.find(k => Number(k.question_number) === questionNumber)?.answer_text ?? null})),
+        answerPages: await listAnswerKeyPages(examId)
+      }});
+    } catch (error) { next(error); }
+  });
+
+
+// AI proposals are separate from formal grades. Missing/stale proposals return null.
+router.get("/exams/:examId/block-crops/:cropId/ai-suggestion",
+  requireExamAccess, requirePermission(PERMISSIONS.GRADE_READ), requireGradingScope,
+  async(req,res,next)=>{
+    try {
+      const {authorizedAiCrop,readAiSuggestion}=await import("../services/AiScoreSuggestionService");
+      const {crop}=await authorizedAiCrop(req);
+      res.json({ok:true,data:await readAiSuggestion(crop)});
+    } catch(error){next(error);}
+  });
+router.post("/exams/:examId/block-crops/:cropId/ai-suggestion/adopt",
+  requireExamAccess, requirePermission(PERMISSIONS.GRADE_WRITE), requireGradingScope,
+  async(req,res,next)=>{
+    try {
+      const {adoptAiDraft}=await import("../services/AiScoreSuggestionService");
+      res.json({ok:true,data:await adoptAiDraft(req)});
+    } catch(error){next(error);}
+  });
 
 // GET /api/review/my-exams — 教师有哪些考试有待阅任务
 router.get("/my-exams", async (req, res) => {
@@ -81,7 +206,7 @@ router.get("/exams/:examId/blocks", requireExamAccess, async (req, res, next) =>
     // 安全 R03：`requireExamAccess` 只判定「能否看到这场考试」，题块级阅卷人因此能
     // 列出全卷题块与每题统计。读取侧按 `getPermittedBlocks` 收敛（null = 不受限）。
     const blocks = await listReviewBlocks(examId, getMysqlDb(), await getPermittedBlocks(req.user, examId));
-    res.json({ examId, blocks });
+    res.json({ ok: true, data: blocks, examId, blocks });
   } catch (error) {
     next(error);
   }
@@ -160,6 +285,8 @@ router.post(
         scores,
         status,
         blockTotalScore,
+        expectedVersion: Number.isSafeInteger(req.body?.version) && req.body.version >= 0
+          ? req.body.version : undefined,
         userId: req.user!.id,
         // 管理员与学年主任均可代交/强制处理他人已领取的试卷
         isAdmin: isAdmin || isGradeLeader

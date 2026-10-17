@@ -1,6 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { ArrowLeft, ClipboardCheck, Users, AlertCircle, FileSearch, Settings } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Users, AlertCircle, FileSearch, Settings, Table2 } from "lucide-react";
 import { fetchJson } from "../auth/api";
+import {useLocation} from "react-router-dom";
+import {ExamPdfProgressPanel,legacyPdfEnabled} from "./ExamPdfProgressPanel";
+import {ExamQuestionSummaryPanel} from "./ExamQuestionSummaryPanel";
+import { TeacherProgressPanel } from "./TeacherProgressPanel";
 import { BlockSelectPage } from "./BlockSelectPage";
 import { ReviewAssignPage } from "./ReviewAssignPage";
 import { DisputeManagePage } from "./DisputeManagePage";
@@ -9,7 +13,7 @@ import { GradingConfigPage } from "./GradingConfigPage";
 import { Badge, Button, SegmentedControl, Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/v2";
 import { EXAM_MODE_LABELS, type ExamMode, type ExamRecord } from "../../../../shared/types";
 
-type ExamDetailTab = "review" | "assign" | "disputes" | "trace" | "settings";
+type ExamDetailTab = "summary" | "teacher-progress" | "review" | "assign" | "disputes" | "trace" | "settings";
 
 interface Props {
   examId: number;
@@ -41,6 +45,9 @@ export function ExamDetailPage({
   const [activeTab, setActiveTab] = useState<ExamDetailTab>("review");
   const [examMode, setExamMode] = useState<ExamMode>("formal");
   const [modeBusy, setModeBusy] = useState(false);
+
+  const location=useLocation();
+  useEffect(()=>{setActiveTab(legacyPdfEnabled&&new URLSearchParams(location.search).get("tab")==="summary"?"summary":"review");},[examId,location.search]);
 
   const isGradeLeader = teacherRole === "grade_leader" || userRole === "admin";
   const isAdmin = userRole === "admin";
@@ -77,7 +84,10 @@ export function ExamDetailPage({
     return false;
   };
 
-  const visibleTabs = tabs.filter((t) => canSeeTab(t.requiresRole));
+  const visibleTabs = [...tabs,...(legacyPdfEnabled?[
+    {key:"teacher-progress" as const,icon:Users,label:"教师进度",requiresRole:"grade_leader" as const},
+    {key:"summary" as const,icon:Table2,label:"逐题汇总",requiresRole:"grade_leader" as const}
+  ]:[])].filter((t) => canSeeTab(t.requiresRole));
   const canSee = (key: ExamDetailTab) => visibleTabs.some((t) => t.key === key);
 
   return (
@@ -106,6 +116,7 @@ export function ExamDetailPage({
         </div>
       </div>
 
+      <ExamPdfProgressPanel examId={examId}/>
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ExamDetailTab)}>
         {/* Tab 栏 */}
         <TabsList className="mb-6">
@@ -118,6 +129,8 @@ export function ExamDetailPage({
         </TabsList>
 
         {/* Tab 内容 */}
+        {canSee("summary")&&<TabsContent value="summary"><ExamQuestionSummaryPanel examId={examId}/></TabsContent>}
+        {canSee("teacher-progress")&&<TabsContent value="teacher-progress"><TeacherProgressPanel examId={examId} active={activeTab === "teacher-progress"}/></TabsContent>}
         {canSee("review") && (
           <TabsContent value="review">
             <BlockSelectPage

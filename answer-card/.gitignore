@@ -32,3 +32,9 @@ AGENTS.md
 docs/
 readus/
 user guide/
+
+# Runtime dumps and local editing backups
+/core
+/core.*
+*.bak-*
+/deploy/legacy/*.json

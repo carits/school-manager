@@ -1148,6 +1148,77 @@ export async function runMariadbMigrations(conn: mariadb.Connection | mariadb.Po
     "ALTER TABLE answer_cards ADD COLUMN profile_json TEXT",
   ] });
 
+  mariadbMigrations.push({ version: 62, name: "independent-review-tasks", sqls: [
+    `CREATE TABLE IF NOT EXISTS review_tasks (
+      id VARCHAR(64) PRIMARY KEY, title VARCHAR(200) NOT NULL, card_id VARCHAR(64) NOT NULL,
+      source_exam_id INT NULL, card_revision INT NOT NULL DEFAULT 0, config_snapshot LONGTEXT NOT NULL,
+      split_profile LONGTEXT NULL, source_profile LONGTEXT NULL, status VARCHAR(32) NOT NULL DEFAULT 'created',
+      source_count INT NOT NULL DEFAULT 0, created_by INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_review_tasks_creator (created_by), INDEX idx_review_tasks_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS review_task_students (
+      id VARCHAR(64) PRIMARY KEY, task_id VARCHAR(64) NOT NULL, student_id INT NULL,
+      student_number VARCHAR(64) NOT NULL, class_code VARCHAR(64) NOT NULL, student_name VARCHAR(120) NOT NULL DEFAULT '',
+      directory_number VARCHAR(120) NOT NULL, identity_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+      identity_confidence DOUBLE NULL, identity_source VARCHAR(32) NULL, status VARCHAR(32) NOT NULL DEFAULT 'active',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_review_task_student_dir (task_id,directory_number), INDEX idx_review_task_students_number (task_id,student_number)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS review_task_items (
+      id VARCHAR(64) PRIMARY KEY, task_id VARCHAR(64) NOT NULL, task_student_id VARCHAR(64) NOT NULL,
+      item_type VARCHAR(20) NOT NULL, block_key VARCHAR(64) NOT NULL, source_name VARCHAR(255) NOT NULL,
+      image_path TEXT NOT NULL, file_hash CHAR(64) NOT NULL, recognized_json LONGTEXT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'pending', assigned_to INT NULL, claimed_by INT NULL, claimed_at DATETIME NULL,
+      score DECIMAL(8,2) NULL, max_score DECIMAL(8,2) NULL, reviewer_id INT NULL, reviewed_at DATETIME NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_review_task_items_task (task_id), INDEX idx_review_task_items_assignment (task_id,assigned_to,status),
+      UNIQUE KEY uk_review_task_item (task_id,task_student_id,block_key,file_hash)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS review_task_scores (
+      id VARCHAR(64) PRIMARY KEY, task_id VARCHAR(64) NOT NULL, student_id VARCHAR(64) NOT NULL,
+      question_number INT NOT NULL, score DECIMAL(8,2) NOT NULL, max_score DECIMAL(8,2) NOT NULL,
+      score_type VARCHAR(20) NOT NULL, reviewer_id INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_review_task_scores_student (task_id,student_id,question_number)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS review_task_events (
+      id VARCHAR(64) PRIMARY KEY, task_id VARCHAR(64) NOT NULL, actor_id INT NULL,
+      event_type VARCHAR(64) NOT NULL, payload LONGTEXT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_review_task_events_task (task_id,created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  ] });
+
+
+
+  mariadbMigrations.push({ version: 63, name: "review-recognition-and-quantity-assignments", sqls: [
+    "ALTER TABLE review_task_students ADD COLUMN sheet_no INT NULL",
+    "ALTER TABLE review_task_students ADD COLUMN source_directory VARCHAR(120) NULL",
+    "ALTER TABLE review_task_students ADD COLUMN identity_result_json LONGTEXT NULL",
+    "ALTER TABLE review_task_students MODIFY student_number VARCHAR(64) NULL",
+    "ALTER TABLE review_task_students MODIFY class_code VARCHAR(64) NULL",
+    "ALTER TABLE review_task_students MODIFY student_name VARCHAR(120) NULL",
+    "UPDATE review_task_students SET source_directory = COALESCE(source_directory, directory_number) WHERE source_directory IS NULL",
+    "UPDATE review_task_students s JOIN (SELECT id, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at, id) AS rn FROM review_task_students) x ON x.id=s.id SET s.sheet_no=x.rn WHERE s.sheet_no IS NULL",
+    "ALTER TABLE review_task_students MODIFY sheet_no INT NOT NULL",
+    "ALTER TABLE review_task_students ADD UNIQUE KEY uk_review_task_student_sheet (task_id,sheet_no)",
+    "ALTER TABLE review_task_items ADD COLUMN recognition_status VARCHAR(32) NULL",
+    "ALTER TABLE review_task_items ADD COLUMN assignment_id VARCHAR(64) NULL",
+    "ALTER TABLE review_tasks ADD COLUMN recognition_total INT NOT NULL DEFAULT 0",
+    "ALTER TABLE review_tasks ADD COLUMN recognition_done INT NOT NULL DEFAULT 0",
+    "ALTER TABLE review_tasks ADD COLUMN recognition_error INT NOT NULL DEFAULT 0",
+    "ALTER TABLE review_tasks ADD COLUMN recognition_started_at DATETIME NULL",
+    "ALTER TABLE review_tasks ADD COLUMN recognition_finished_at DATETIME NULL",
+    `CREATE TABLE IF NOT EXISTS review_task_assignments (
+      id VARCHAR(64) PRIMARY KEY, task_id VARCHAR(64) NOT NULL, block_key VARCHAR(64) NOT NULL,
+      teacher_id INT NOT NULL, quantity INT NOT NULL, allocated_count INT NOT NULL DEFAULT 0,
+      claimed_count INT NOT NULL DEFAULT 0, scored_count INT NOT NULL DEFAULT 0,
+      status VARCHAR(32) NOT NULL DEFAULT 'active', created_by INT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_review_task_assignments_task (task_id,block_key,status),
+      INDEX idx_review_task_assignments_teacher (task_id,teacher_id,status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  ] });
+
   for (const m of mariadbMigrations) {
     if (applied.has(m.version)) continue;
     for (const sql of m.sqls) {

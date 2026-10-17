@@ -5,10 +5,10 @@ import { useCallback, useEffect, useState } from "react";
 
 export type ScannerMode = "local" | "remote";
 
-const MODE_KEY = "projectx_scanner_mode";
+const MODE_KEY = "legacy-old_scanner_mode";
 
 // v2.5.1 审查遗留：服务器地址 key 与 auth/api.ts 的 getRemoteScannerBase 同源，收敛为具名常量
-export const SERVER_URL_KEY = "projectx_server_url";
+export const SERVER_URL_KEY = "legacy-old_server_url";
 
 /**
  * v2.5.6：服务器地址归一化——所有读写该 key 的位置必须走这里。

@@ -7,6 +7,8 @@ import { fetchJson } from "../auth/api";
 import type { TeacherBlockAssignment } from "../../../../shared/types";
 import { Badge, Card, EmptyState, Progress, Spinner } from "./ui/v2";
 
+interface ReviewGroup { id: string; title: string; questionNumbers: number[]; mode: string; assignedCount: number; pendingCount: number; reviewedCount: number; heldCount: number }
+
 interface Props {
   examId: number;
   teacherId: number;
@@ -15,19 +17,37 @@ interface Props {
 
 export function BlockSelectPage({ examId, teacherId, onSelectBlock }: Props) {
   const [blocks, setBlocks] = useState<TeacherBlockAssignment[]>([]);
+  const [groups, setGroups] = useState<ReviewGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const [groupError, setGroupError] = useState("");
 
   const loadBlocks = useCallback(async () => {
-    try {
-      const res = await fetchJson<{ ok: boolean; data: TeacherBlockAssignment[] }>(
-        `/api/review-assign/exams/${examId}/teachers/me/blocks`
-      );
-      if (res.ok) setBlocks(res.data);
-    } catch { /* silent */ }
+    const [blockResult, groupResult] = await Promise.allSettled([
+      fetchJson<{ ok: boolean; data: TeacherBlockAssignment[] }>(`/api/review-assign/exams/${examId}/teachers/me/blocks`),
+      fetchJson<{ ok: boolean; groups: ReviewGroup[] }>(`/api/review-groups/exams/${examId}`),
+    ]);
+    if (blockResult.status === "fulfilled" && blockResult.value.ok) setBlocks(blockResult.value.data);
+    if (groupResult.status === "fulfilled" && groupResult.value.ok && Array.isArray(groupResult.value.groups)) {
+      const active = groupResult.value.groups.filter(g => g.mode === "active");
+      setGroups(active);
+      setGroupError(examId === 22 && active.length === 0 ? "合并阅卷题组暂不可用，请重试。" : "");
+    } else {
+      setGroupError(examId === 22 ? "合并阅卷题组读取失败，请重试。旧小题已停止评分。" : "");
+    }
     setLoading(false);
   }, [examId]);
 
-  useEffect(() => { loadBlocks(); }, [loadBlocks]);
+  useEffect(() => { void loadBlocks(); }, [loadBlocks]);
+  useEffect(() => {
+    if (!groupError) return;
+    const timer = window.setTimeout(() => { void loadBlocks(); }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [groupError, loadBlocks]);
+  useEffect(() => {
+    const reload = () => { if (document.visibilityState === "visible") void loadBlocks(); };
+    document.addEventListener("visibilitychange", reload);
+    return () => document.removeEventListener("visibilitychange", reload);
+  }, [loadBlocks]);
 
   if (loading) {
     return (
@@ -37,7 +57,7 @@ export function BlockSelectPage({ examId, teacherId, onSelectBlock }: Props) {
     );
   }
 
-  if (blocks.length === 0) {
+  if (blocks.length === 0 && groups.length === 0 && !groupError) {
     return (
       <EmptyState
         icon={<ClipboardList />}
@@ -49,10 +69,25 @@ export function BlockSelectPage({ examId, teacherId, onSelectBlock }: Props) {
 
   return (
     <div className="flex flex-col gap-4 p-6" data-teacher-id={teacherId}>
-      <h2 className="text-base font-medium text-foreground">选择题块开始阅卷</h2>
+      <h2 className="text-base font-medium text-foreground">选择题块阅卷或回看</h2>
+      {groupError && <div role="alert" className="flex items-center gap-3 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"><span>{groupError}</span><button type="button" onClick={() => void loadBlocks()} className="rounded border border-red-400 px-3 py-1">重新加载</button></div>}
 
       <div className="flex flex-col gap-3">
-        {blocks.map((block) => {
+        {groups.map(group => <Card key={group.id} interactive className="p-4" role="button" tabIndex={0}
+          onClick={() => onSelectBlock("review-group:" + group.id)}
+          onKeyDown={e => { if(e.key==="Enter" || e.key===" "){e.preventDefault();onSelectBlock("review-group:" + group.id)} }}>
+          <div className="mb-2 flex justify-between gap-3"><span className="font-medium">{group.title}（合并阅卷）</span><span>{group.reviewedCount}/{group.assignedCount}份</span></div>
+          <Progress value={group.assignedCount ? Math.round(group.reviewedCount / group.assignedCount * 100) : 0} tone="primary" size="sm" />
+          <p className="mt-2 text-sm text-muted-foreground">待评 {group.pendingCount} 份 · 已评可回看修改</p>
+        </Card>)}
+        {blocks.filter(block => {
+          const q = /^第(\d+)题$/.exec(block.blockTitle || "");
+          if (!q) return true;
+          const number = Number(q[1]);
+          // Exam 22 uses the merged entry for 46–60; the child score endpoint is frozen.
+          if (examId === 22 && number >= 46 && number <= 60) return false;
+          return !groups.some(group => group.questionNumbers.includes(number));
+        }).map((block) => {
           const pct = block.totalCount > 0
             ? Math.round((block.remainingForMe / block.totalCount) * 100)
             : 100;
@@ -61,13 +96,12 @@ export function BlockSelectPage({ examId, teacherId, onSelectBlock }: Props) {
           return (
             <Card
               key={block.blockId}
-              interactive={!isDone}
-              className={isDone ? "p-4 opacity-60" : "p-4"}
-              onClick={() => !isDone && onSelectBlock(block.blockId)}
-              role={isDone ? undefined : "button"}
-              tabIndex={isDone ? undefined : 0}
+              interactive
+              className="p-4"
+              onClick={() => onSelectBlock(block.blockId)}
+              role="button"
+              tabIndex={0}
               onKeyDown={(e) => {
-                if (isDone) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   onSelectBlock(block.blockId);
@@ -87,7 +121,7 @@ export function BlockSelectPage({ examId, teacherId, onSelectBlock }: Props) {
 
               {isDone && (
                 <div className="mt-2">
-                  <Badge tone="success" dot>已完成</Badge>
+                  <Badge tone="success" dot>已完成，可回看修改</Badge>
                 </div>
               )}
             </Card>

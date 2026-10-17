@@ -30,6 +30,7 @@ import { MAX_FILE_SIZE, storeAnswerKeyPageFile, validatePaperFile } from "../pap
 import { purgeStaleTmpUploads } from "../paperQuota";
 import { extractDocxText, extractPdfText, extractImageText } from "../paper-ocr";
 import { MAX_ANSWER_TEXT_LENGTH, MAX_QUESTION_NUMBER, parseAnswerKeyText } from "../answer-key-ocr";
+import {syncLegacyExamReferenceKeys} from "../../../../server/services/LegacyPdfService";
 import { requireExamAccess } from "../middleware";
 
 /** 答案页上限：既是单批上传上限，也是单场考试的累计上限（页码查看/重识别/删除接口只认 1..该值） */
@@ -214,8 +215,10 @@ export function examAnswerKeyRoutes(): Router {
         normalized.push({ questionNumber, answerText, pageIndex });
       }
 
+      let legacyScoring: {warnings:string[]} | undefined;
       // 全量替换：删除未提交的题号，其余 upsert。事务保证不出现半套答案。
       await db.transaction(async (tx) => {
+        if(process.env.PROJECTX_LEGACY_ONLY==="1")await tx.get("SELECT id FROM exams WHERE id=? FOR UPDATE",exam.id);
         await tx.run("DELETE FROM exam_answer_keys WHERE exam_id = ?", exam.id);
         if (normalized.length > 0) {
           const sql = buildUpsertSQL(
@@ -229,9 +232,10 @@ export function examAnswerKeyRoutes(): Router {
             await tx.run(sql, exam.id, row.questionNumber, row.answerText, row.pageIndex, req.user?.id ?? null);
           }
         }
+        legacyScoring=await syncLegacyExamReferenceKeys(req,exam.id,normalized,tx);
       });
 
-      res.json({ success: true, saved: normalized.length, answers: await listExamAnswerKeys(exam.id, db) });
+      res.json({ legacyScoring, success: true, saved: normalized.length, answers: await listExamAnswerKeys(exam.id, db) });
     } catch (err: any) {
       console.error("[answer-key] save failed:", err);
       res.status(500).json({ message: err.message || "保存答案失败" });

@@ -25,10 +25,9 @@ export default defineConfig(({ mode }) => {
   const scannerOutDir = path.join(__dirname, "dist", "scanner");
 
   return {
-    // The web service is published below /answer-card/. Keeping the base here
-    // makes Vite emit script, stylesheet, and public asset URLs that survive
-    // the Nginx path prefix instead of falling through to the legacy service.
-    base: isScanner ? "/" : "/answer-card/",
+    // The legacy root page is served at /answer-card/, but its assets must use
+    // the old app route. /answer-card/assets/ belongs to the protected service.
+    base: isScanner ? "/" : process.env.VITE_LEGACY_ONLY === "1" ? "/answer-card/legacy-api/" : "/answer-card/",
     plugins: [
       react(),
       tailwindcss(),
@@ -47,6 +46,7 @@ export default defineConfig(({ mode }) => {
     define: {
       // Compile-time constant so Vite can tree-shake scanner code from web builds
       "import.meta.env.VITE_BUILD_TARGET": JSON.stringify(buildTarget),
+      "import.meta.env.VITE_LEGACY_ONLY": JSON.stringify(process.env.VITE_LEGACY_ONLY === "1" ? "1" : "0"),
       "import.meta.env.VITE_APP_VERSION": JSON.stringify(packageJson.version ?? "0.0.0")
     },
     server: {
@@ -80,6 +80,7 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: isScanner ? scannerOutDir : "dist/web",
+      assetsDir: process.env.VITE_LEGACY_ONLY === "1" ? "legacy-pdf-assets" : "assets",
       target: isScanner ? undefined : [...WEB_BUILD_TARGET],
       rollupOptions: {
         input: path.resolve(

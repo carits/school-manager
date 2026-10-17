@@ -261,7 +261,7 @@ function defaultBlankQuestion(
 // 预览缩放模式与持久化设置（B1 从 App.tsx 迁入，供 DesignEditors 的 CardPreview 使用）
 export type PreviewMode = "fit-width" | "fit-page" | "fit-panel" | "custom";
 
-export const PREVIEW_SETTINGS_KEY = "projectx-card-preview-settings-v1";
+export const PREVIEW_SETTINGS_KEY = (import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-card-preview-settings-v1' : 'projectx-card-preview-settings-v1') : 'projectx-card-preview-settings-v1');
 export const PREVIEW_MIN_PERCENT = 50;
 export const PREVIEW_MAX_PERCENT = 400;
 

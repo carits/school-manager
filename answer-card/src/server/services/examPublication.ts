@@ -20,6 +20,7 @@ import { ensureExamParticipants, listMissingParticipants } from "./examParticipa
  * 抛出 `{ status: 409 }` 由路由统一映射为 409 响应。
  */
 export async function assertScoresPublishable(db: DbAdapter, exam: { id: number }): Promise<void> {
+  if(process.env.PROJECTX_LEGACY_ONLY==="1")await (await import("./LegacyPdfService")).assertLegacyScoresReady(db,exam.id);
   const scoredRow = await db.get<{ n: number }>(
     "SELECT COUNT(DISTINCT student_id) AS n FROM student_scores WHERE exam_id = ?",
     exam.id

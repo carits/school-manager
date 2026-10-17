@@ -70,7 +70,7 @@ router.get(
       }
       res.json({ ok: true, data: permitted });
     } catch (err: any) {
-      res.status(500).json({ ok: false, error: err.message });
+      res.status(err.status === 409 ? 409 : 500).json({ ok: false, error: err.message });
     }
   }
 );
@@ -87,7 +87,7 @@ router.get(
       const assignments = await getAssignmentsByBlock(examId, blockId);
       res.json({ ok: true, data: assignments });
     } catch (err: any) {
-      res.status(500).json({ ok: false, error: err.message });
+      res.status(err.status === 409 ? 409 : 500).json({ ok: false, error: err.message });
     }
   }
 );
@@ -107,7 +107,7 @@ router.get(
       const blocks = await getAvailableBlocksForTeacher(examId, teacherId, undefined, (req as any).user);
       res.json({ ok: true, data: blocks });
     } catch (err: any) {
-      res.status(500).json({ ok: false, error: err.message });
+      res.status(err.status === 409 ? 409 : 500).json({ ok: false, error: err.message });
     }
   }
 );
@@ -162,7 +162,7 @@ router.post(
       const assignments = await createAssignments(examId, String(req.params.blockId ?? ""), map, userId);
       res.json({ ok: true, data: assignments });
     } catch (err: any) {
-      res.status(500).json({ ok: false, error: err.message });
+      res.status(err.status === 409 ? 409 : 500).json({ ok: false, error: err.message });
     }
   }
 );
@@ -177,7 +177,7 @@ router.delete(
       await deleteAssignment(Number(req.params.id));
       res.json({ ok: true });
     } catch (err: any) {
-      res.status(500).json({ ok: false, error: err.message });
+      res.status(err.status === 409 ? 409 : 500).json({ ok: false, error: err.message });
     }
   }
 );

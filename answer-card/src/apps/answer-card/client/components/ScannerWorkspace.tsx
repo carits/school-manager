@@ -141,6 +141,7 @@ export function ScannerWorkspace({ cardId, cardTitle, onBack, skin, onSkinChange
         }
       }
       if (gradingPdf) {
+        if (import.meta.env.VITE_LEGACY_ONLY === "1") { window.location.assign("/answer-card/custom-pdf/"); return; }
         setStatus("PDF 已上传，Linux 服务端正在分页识别...");
         const form = new FormData();
         form.append("file", gradingPdf);

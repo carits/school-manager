@@ -46,8 +46,8 @@ export type PaperSettings = {
   orientation: "portrait" | "landscape";
 };
 
-/** 预设答题卡类型。classic 是历史卡的默认兼容路径。 */
-export type CardPreset = "classic" | "hn_regular" | "hn_standard" | "survey_matrix";
+/** 预设答题卡类型。classic 是历史卡的默认兼容路径。external 表示现成第三方答题卡。 */
+export type CardPreset = "classic" | "hn_regular" | "hn_standard" | "survey_matrix" | "external";
 
 export type SurveyMatrixConfig = {
   rows: string[];
@@ -59,6 +59,8 @@ export type SurveyMatrixConfig = {
 export type CardProfile = {
   preset: CardPreset;
   survey?: SurveyMatrixConfig;
+  /** 外部答题卡模板（方案十九）：现成答题卡的识别配置，归一化坐标。 */
+  externalTemplate?: unknown;
 };
 
 export type StudentInfoField = "姓名" | "班级" | "座位号" | "考号" | "学号";
@@ -430,10 +432,11 @@ export type RecognitionBlockCrop = {
   dpi: number;
 };
 
-export type AnswerBlockCropSourceType = "scan_record" | "twain_scan_record";
+export type AnswerBlockCropSourceType = "scan_record" | "twain_scan_record" | "legacy_pdf";
 
 export type AnswerBlockCrop = {
   id: string;
+  serialNumber?: number | null;
   cardId: string;
   examId?: number | null;
   studentId?: number | null;

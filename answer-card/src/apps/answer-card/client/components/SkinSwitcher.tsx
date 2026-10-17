@@ -38,9 +38,9 @@ export const SKIN_OPTIONS: ReadonlyArray<{ id: string; label: string; descriptio
 ];
 
 export const DEFAULT_SKIN = "paper-edge";
-export const SKIN_STORAGE_KEY = "projectx-skin";
-export const SKIN_CHOSEN_KEY = "projectx-skin-chosen";
-export const THEME_STORAGE_KEY = "projectx-theme";
+export const SKIN_STORAGE_KEY = (import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-skin' : 'projectx-skin') : 'projectx-skin');
+export const SKIN_CHOSEN_KEY = (import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-skin-chosen' : 'projectx-skin-chosen') : 'projectx-skin-chosen');
+export const THEME_STORAGE_KEY = (import.meta.env.VITE_LEGACY_ONLY === "1" ? (import.meta.env.VITE_LEGACY_ONLY === "1" ? 'legacy-old-theme' : 'projectx-theme') : 'projectx-theme');
 
 function readLocalSkin(): string {
   try {

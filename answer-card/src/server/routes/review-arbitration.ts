@@ -12,6 +12,7 @@ import { getMysqlDb, buildUpsertSQL } from "../db";
 import { recomputeExamRankings, roundScore } from "../services/rankingUpdate";
 import { getBlockConfig } from "../services/BlockGradingConfigService";
 import { markScoreMutated } from "../services/examPublishEvents";
+import { readReviewGroups } from "../services/LegacyReviewGroupScoreService";
 
 const router = Router();
 
@@ -76,6 +77,9 @@ router.post(
           cropId
         ) as any;
         if (!crop) throw new Error("切块不存在");
+        if (process.env.PROJECTX_LEGACY_ONLY === "1" && Number(crop.exam_id) === 22 && crop.source_type === "legacy_pdf" &&
+            (await readReviewGroups(tx, 22, true)).some(g => g.mode !== "draft"))
+          throw Object.assign(new Error("此考试已采用合并阅卷，请在整组阅卷入口改分"), {status:409});
 
         // cropId 路由没有 examId 参数，必须在此补上考试可见性校验，避免跨考试仲裁。
         const visibleExamIds = await getVisibleExamIds(req.user);
@@ -207,7 +211,7 @@ router.post(
 
       res.json({ ok: true, cropId, finalScore: Number(score) });
     } catch (err: any) {
-      res.status(500).json({ ok: false, error: err.message });
+      res.status(err?.status === 409 ? 409 : 500).json({ ok: false, error: err.message });
     }
   }
 );

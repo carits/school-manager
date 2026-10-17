@@ -111,6 +111,7 @@ async function releaseSlot(db: DbAdapter, examId: number, reason: string, detail
 }
 
 export async function notifyGradeReleaseSubscribers(examId: number): Promise<void> {
+  if(process.env.PROJECTX_LEGACY_ONLY==="1")return;
   try {
     await notifyGradeReleaseSubscribersInner(examId);
   } catch (error) {
