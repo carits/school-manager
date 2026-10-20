@@ -7,8 +7,8 @@
 const assert=require("node:assert/strict"),fs=require("node:fs"),fsp=require("node:fs/promises");
 const path=require("node:path"),os=require("node:os"),vm=require("node:vm"),crypto=require("node:crypto");
 const {DatabaseSync}=require("node:sqlite"),{performance}=require("node:perf_hooks");
-const root=path.resolve(__dirname,".."),dep=process.env.REVIEW_GROUP_TEST_MODULES || "/home/ecs-user/school-manager-answer-card/answer-card/node_modules";
-const ts=require(path.join(dep,"typescript")),sharp=require(path.join(dep,"sharp"));
+const root=path.resolve(__dirname,".."),dep=process.env.REVIEW_GROUP_TEST_MODULES;
+const ts=require(dep?path.resolve(dep,"typescript"):"typescript"),sharp=require(dep?path.resolve(dep,"sharp"):"sharp");
 const sha=x=>crypto.createHash("sha256").update(x).digest("hex");
 const block=(t,q)=>sha(t+":"+q).slice(0,32);
 let db,service,aiService,scoreService,fixture,failTotals=false,authAllowed=true,log=[],locks=new Map(),count=0;
@@ -267,7 +267,7 @@ async function main(){
   assert.equal(saved.data.score,3);
  });
  await check("HTTP response contracts and protected identity fields",async()=>{
-  seed();const express=require(path.join(dep,"express")),app=express();
+  seed();const express=require(dep?path.resolve(dep,"express"):"express"),app=express();
   const middleware=(req,res,next)=>{req.user={id:9,role_id:2,role_name:"teacher",teacher_role:null};next();};
   const routes=load("源码/server/routes/legacy-review-groups.ts",{
    express,"../middleware/auth":{requirePermission:()=>middleware},
