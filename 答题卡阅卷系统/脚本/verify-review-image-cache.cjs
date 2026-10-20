@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const dep=process.env.REVIEW_GROUP_TEST_MODULES||'/home/ecs-user/school-manager-answer-card/answer-card/node_modules';
-const ts=require(path.join(dep,'typescript'));
+const dep=process.env.REVIEW_GROUP_TEST_MODULES;
+const ts=require(dep?path.resolve(dep,'typescript'):'typescript');
 const source=fs.readFileSync(path.join(__dirname,'../源码/apps/answer-card/client/util/reviewGroupImageCache.ts'),'utf8');
 const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 const mod={exports:{}};vm.runInNewContext(js,{module:mod,exports:mod.exports,Map,Promise,Error,AbortController});

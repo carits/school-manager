@@ -7,7 +7,7 @@ import {createRequire} from "node:module";
 import * as groups from "../源码/server/services/LegacyReviewGroupScoreService.ts";
 process.env.PROJECTX_LEGACY_ONLY="1";
 const require=createRequire(import.meta.url);
-const ts=require(process.env.LEGACY_TEST_TYPESCRIPT || "/home/ecs-user/school-manager-answer-card/answer-card/node_modules/typescript");
+const ts=require(process.env.LEGACY_TEST_TYPESCRIPT || "typescript");
 const plain=v=>JSON.parse(JSON.stringify(v));
 const fail=()=>{throw new Error("A live dependency was invoked by an isolated test");};
 const questions=[40,...Array.from({length:15},(_,i)=>46+i),61].map(n=>({questionId:"q"+n,displayNumber:String(n),gradingType:n===40?"objective":"teacher_score",maxScore:n===40?10:n===61?5:2,answer:null}));

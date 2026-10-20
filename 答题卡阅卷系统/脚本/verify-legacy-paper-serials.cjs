@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {DatabaseSync}=require('node:sqlite');
 const root=path.resolve(__dirname,'..');
-const ts=require(process.env.SERIAL_TEST_TYPESCRIPT || '/home/ecs-user/school-manager-answer-card/answer-card/node_modules/typescript');
+const ts=require(process.env.SERIAL_TEST_TYPESCRIPT || 'typescript');
 const source=fs.readFileSync(path.join(root,'源码/server/services/LegacyPaperSerialService.ts'),'utf8');
 const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}});
 const mod={exports:{}};
