@@ -15,19 +15,22 @@ const WEB_BUILD_TARGET = ["es2020", "safari15"] as const;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const projectRoot = process.cwd();
 const packageJson = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "package.json"), "utf8")
+  fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")
 ) as { version?: string };
 
 export default defineConfig(({ mode }) => {
   const isScanner = mode === "scanner";
-  const buildTarget = isScanner ? "scanner" : "web";
-  const scannerOutDir = path.join(__dirname, "dist", "scanner");
+  const isSportsMeet = process.env.VITE_BUILD_TARGET === "sports-meet";
+  const buildTarget = isScanner ? "scanner" : isSportsMeet ? "sports-meet" : "web";
+  const scannerOutDir = path.join(projectRoot, "dist", "scanner");
+  const sportsMeetOutDir = path.join(projectRoot, "dist", "sports-meet");
 
   return {
     // The legacy root page is served at /answer-card/, but its assets must use
     // the old app route. /answer-card/assets/ belongs to the protected service.
-    base: isScanner ? "/" : process.env.VITE_LEGACY_ONLY === "1" ? "/answer-card/legacy-api/" : "/answer-card/",
+    base: isScanner ? "/" : isSportsMeet ? "/sports-meet/" : process.env.VITE_LEGACY_ONLY === "1" ? "/answer-card/legacy-api/" : "/answer-card/",
     publicDir: "公共资源",
     plugins: [
       react(),
@@ -80,15 +83,14 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
-      outDir: isScanner ? scannerOutDir : "dist/web",
+      outDir: isScanner ? scannerOutDir : isSportsMeet ? sportsMeetOutDir : "dist/web",
       assetsDir: process.env.VITE_LEGACY_ONLY === "1" ? "legacy-pdf-assets" : "assets",
       target: isScanner ? undefined : [...WEB_BUILD_TARGET],
-      rollupOptions: {
-        input: path.resolve(
-          __dirname,
-          isScanner ? "index-scanner.html" : "index.html"
-        )
-      }
+      ...(isScanner ? {
+        rollupOptions: {
+          input: path.resolve(projectRoot, "index-scanner.html")
+        }
+      } : {})
     }
   };
 });

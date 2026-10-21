@@ -24,6 +24,7 @@ function getApiBase(): string {
   if (typeof window !== "undefined") {
     if (/^\/wenjuan(?:\/|$)/.test(window.location.pathname)) return "/wenjuan";
     if (/^\/answer-card(?:\/|$)/.test(window.location.pathname)) return "/answer-card";
+    if (/^\/sports-meet(?:\/|$)/.test(window.location.pathname)) return "/sports-meet";
   }
   return "";
 }

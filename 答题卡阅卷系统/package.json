@@ -10,6 +10,7 @@
     "dev": "concurrently \"tsx watch 源码/apps/answer-card/server/index.ts\" \"vite --host 127.0.0.1\"",
     "build": "npm run typecheck && npm run build:web && npm run build:server",
     "build:web": "vite build --mode web",
+    "build:sports-meet": "node 脚本/build-sports-meet.cjs",
     "build:web:full": "npm run typecheck && npm run build:web && npm run build:server",
     "build:server": "tsx 脚本/build-server.ts",
     "native:rebuild:node": "npm rebuild better-sqlite3",

@@ -8,7 +8,6 @@ import type { ProjectXAppMode } from "../../../shared/appVariant";
 export const MODE_PATH: Record<ProjectXAppMode, string> = {
   design: "/design",
   "exam-manage": "/exam-manage",
-  "sports-meet": "/sports-meet",
   home: "/home",
   analysis: "/analysis",
   scores: "/scores",

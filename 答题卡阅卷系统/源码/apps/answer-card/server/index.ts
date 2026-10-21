@@ -3690,6 +3690,28 @@ export async function createApp(): Promise<express.Express> {
     res.status(404).json({ code: ApiError.NOT_FOUND, message: "API route not found" });
   });
 
+  // 运动会是独立工作台，使用自己的前端构建和 URL 前缀，不挂在答题卡 SPA 下面。
+  const sportsMeetClientDist = process.env.SPORTS_MEET_CLIENT_DIST
+    ? path.resolve(process.env.SPORTS_MEET_CLIENT_DIST)
+    : path.join(rootDir, "dist", "sports-meet");
+  if (existsSync(sportsMeetClientDist)) {
+    app.use("/sports-meet", express.static(sportsMeetClientDist, {
+      setHeaders: (res, filePath) => {
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === ".html" || ext === ".js" || ext === ".mjs" || ext === ".css") {
+          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        }
+      }
+    }));
+    app.get("/sports-meet/{*splat}", (_req, res) => {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.sendFile(path.join(sportsMeetClientDist, "index.html"));
+    });
+  }
+
   const clientDist = process.env.ANSWER_CARD_CLIENT_DIST
     ? path.resolve(process.env.ANSWER_CARD_CLIENT_DIST)
     : path.join(rootDir, "dist", "web");
