@@ -1330,6 +1330,73 @@ MIGRATIONS.push({ version: 61, name: "answer-card-profile", up(db) {
   addColumnIfMissing(db, "answer_cards", "profile_json", "TEXT");
 } });
 
+MIGRATIONS.push({ version: 62, name: "sports-meet", up(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sports_meets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      start_date TEXT,
+      end_date TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      scoring_json TEXT NOT NULL DEFAULT '{"points":[9,7,6,5,4,3,2,1]}',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS sports_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      meet_id INTEGER NOT NULL REFERENCES sports_meets(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'track',
+      result_kind TEXT NOT NULL DEFAULT 'time',
+      grade_name TEXT,
+      gender TEXT,
+      unit TEXT NOT NULL DEFAULT '秒',
+      stage TEXT NOT NULL DEFAULT '决赛',
+      schedule_at TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS sports_participants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      meet_id INTEGER NOT NULL REFERENCES sports_meets(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      class_name TEXT NOT NULL,
+      grade_name TEXT,
+      gender TEXT,
+      bib_no TEXT,
+      participant_type TEXT NOT NULL DEFAULT 'individual',
+      team_members_json TEXT NOT NULL DEFAULT '[]',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS sports_heats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id INTEGER NOT NULL REFERENCES sports_events(id) ON DELETE CASCADE,
+      stage TEXT NOT NULL DEFAULT '决赛',
+      heat_no INTEGER NOT NULL DEFAULT 1,
+      scheduled_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS sports_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id INTEGER NOT NULL REFERENCES sports_events(id) ON DELETE CASCADE,
+      participant_id INTEGER NOT NULL REFERENCES sports_participants(id) ON DELETE CASCADE,
+      heat_id INTEGER REFERENCES sports_heats(id) ON DELETE SET NULL,
+      lane_no INTEGER,
+      class_name TEXT NOT NULL,
+      result_text TEXT NOT NULL DEFAULT '',
+      result_value REAL,
+      status TEXT NOT NULL DEFAULT 'valid',
+      rank_no INTEGER,
+      points REAL NOT NULL DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(event_id, participant_id, heat_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sports_events_meet ON sports_events(meet_id);
+    CREATE INDEX IF NOT EXISTS idx_sports_participants_meet ON sports_participants(meet_id);
+    CREATE INDEX IF NOT EXISTS idx_sports_entries_event ON sports_entries(event_id);
+  `);
+} });
+
 export function runMigrations(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (

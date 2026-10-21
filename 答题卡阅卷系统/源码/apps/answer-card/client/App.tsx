@@ -31,6 +31,7 @@ import {
   AlertTriangle,
   X,
   ArrowLeft,
+  Trophy,
 } from "lucide-react";
 import { useAuth } from "./auth/AuthContext";
 import { apiUrl, authFetch, fetchJson, mediaUrl, ticketedMediaUrl, urlWithToken } from "./auth/api";
@@ -100,6 +101,7 @@ const PermissionsRoutePage = lazy(() => import("./pages/InfoRoutePages").then((m
 const GuideRoutePage = lazy(() => import("./pages/InfoRoutePages").then((m) => ({ default: m.GuideRoutePage })));
 const GlobalSettingsRoutePage = lazy(() => import("./pages/GlobalSettingsRoutePage").then((m) => ({ default: m.GlobalSettingsRoutePage })));
 const AdminConsoleRoutePage = lazy(() => import("./pages/AdminConsoleRoutePage").then((m) => ({ default: m.AdminConsoleRoutePage })));
+const SportsMeetPage = lazy(() => import("./pages/SportsMeetPage").then((m) => ({ default: m.SportsMeetPage })));
 const GradePanel = lazy(() => import("./components/GradePanel").then((m) => ({ default: m.GradePanel })));
 const ReviewGroupPanel = lazy(() => import("./components/ReviewGroupPanel").then((m) => ({ default: m.ReviewGroupPanel })));
 const PaperUploadPanel = lazy(() => import("./components/PaperUploadPanel").then((m) => ({ default: m.PaperUploadPanel })));
@@ -240,6 +242,7 @@ function defaultModeForUser(
     if (mode === "design") return hasPermission(PERMISSIONS.CARD_READ);
     if (mode === "exam-manage") return hasPermission(PERMISSIONS.EXAM_WRITE);
     if (mode === "analysis") return hasPermission(PERMISSIONS.EXAM_READ);
+    if (mode === "sports-meet") return hasPermission(PERMISSIONS.SYSTEM_MANAGE);
     if (mode === "account") return hasPermission(PERMISSIONS.USER_MANAGE);
     return false;
   };
@@ -439,6 +442,7 @@ function App() {
   const canViewScores = variantAllows("scores") && hasPermission(PERMISSIONS.SCORE_READ);
   const canManageAccounts = variantAllows("account") && hasPermission(PERMISSIONS.USER_MANAGE);
   const canManageGlobal = variantAllows("global-settings") && hasPermission(PERMISSIONS.SYSTEM_MANAGE);
+  const canManageSportsMeet = variantAllows("sports-meet") && hasPermission(PERMISSIONS.SYSTEM_MANAGE);
   const canOpenMode = useCallback(
     (candidate: AppMode) => {
       // 信息页不在 allowedModes 主导航内，按路由守卫同样的规则放行：
@@ -451,13 +455,14 @@ function App() {
       if (candidate === "design") return canDesign;
       if (candidate === "exam-manage") return canManageExams;
       if (candidate === "analysis") return canAnalyze;
+      if (candidate === "sports-meet") return canManageSportsMeet;
       if (candidate === "account") return canManageAccounts;
       if (candidate === "account-settings") return true;
       if (candidate === "global-settings") return canManageGlobal;
       if (candidate === "admin-console") return canManageGlobal;
       return false;
     },
-    [appVariant.allowedModes, appVariant.id, hasPermission, canDesign, canManageExams, canAnalyze, canManageAccounts, canManageGlobal],
+    [appVariant.allowedModes, appVariant.id, hasPermission, canDesign, canManageExams, canAnalyze, canManageAccounts, canManageGlobal, canManageSportsMeet],
   );
   const fallbackMode = appVariant.id === "student" ? "scores" : "home";
   // 设计器已固定为「画廊 → 编辑器」两步流程，不能再叠加旧的全局答题卡侧栏。
@@ -483,6 +488,9 @@ function App() {
     if (canManageExams) {
       items.push({ id: "exam-manage", icon: <ClipboardList size={22} />, label: "考试管理", shortLabel: "考试", onEnter: async () => { await loadExams(); await loadExamGroups(); } });
     }
+    if (canManageSportsMeet) {
+      items.push({ id: "sports-meet", icon: <Trophy size={22} />, label: "运动会", shortLabel: "运动会" });
+    }
     if (canAnalyze) {
       items.push({ id: "analysis", icon: <BarChart3 size={22} />, label: "成绩分析", shortLabel: "分析", onEnter: loadExams });
     }
@@ -494,7 +502,7 @@ function App() {
     }
     // 移动端最多5个Tab
     return items.slice(0, 5);
-  }, [canOpenMode, canDesign, canManageExams, canAnalyze, showScoresTab, canManageAccounts, loadExams, loadExamGroups]);
+  }, [canOpenMode, canDesign, canManageExams, canManageSportsMeet, canAnalyze, showScoresTab, canManageAccounts, loadExams, loadExamGroups]);
 
   useEffect(() => {
     latestCardRef.current = card;
@@ -1507,6 +1515,9 @@ function App() {
         },
       });
     }
+    if (canManageSportsMeet) {
+      items.push({ type: "item", id: "sports-meet", icon: <Trophy />, label: "运动会" });
+    }
     if (canAnalyze) {
       items.push({ type: "item", id: "analysis", icon: <BarChart3 />, label: "成绩分析", onClick: loadExams });
     }
@@ -1530,7 +1541,7 @@ function App() {
       items.push({ type: "item", id: "admin-console", icon: <BarChart3 />, label: "控制台" });
     }
     return items;
-  }, [canOpenMode, canDesign, canManageExams, canAnalyze, showScoresTab, canManageAccounts, canManageGlobal, loadExams, loadExamGroups]);
+  }, [canOpenMode, canDesign, canManageExams, canManageSportsMeet, canAnalyze, showScoresTab, canManageAccounts, canManageGlobal, loadExams, loadExamGroups]);
 
   const selectedBlock = card?.bodyBlocks.find((block) => block.id === selectedBlockId) ?? null;
 
@@ -1691,6 +1702,8 @@ function App() {
           ? "成绩分析"
           : mode === "exam-manage"
             ? "考试管理"
+            : mode === "sports-meet"
+              ? "运动会"
             : mode === "account"
               ? "账号管理"
               : mode === "account-settings"
@@ -1716,6 +1729,8 @@ function App() {
           ? "按考试查看成绩分布、题目分析与班级对比"
           : mode === "exam-manage"
             ? "创建、管理考试与阅卷批次"
+            : mode === "sports-meet"
+              ? "维护赛程、录入成绩并自动生成名次和团体积分"
             : mode === "account"
               ? "管理用户、班级与花名册"
               : mode === "account-settings"
@@ -1948,6 +1963,7 @@ function App() {
                 <Route path="/home" element={canOpenMode("home") ? <HomeRoutePage /> : <Navigate to={MODE_PATH[fallbackMode]} replace />} />
                 <Route path="/design/*" element={canOpenMode("design") ? <Suspense fallback={routeFallback}><DesignPage /></Suspense> : <Navigate to={MODE_PATH[fallbackMode]} replace />} />
                 <Route path="/exam-manage" element={canOpenMode("exam-manage") ? <Suspense fallback={routeFallback}><ExamManagePage /></Suspense> : <Navigate to={MODE_PATH[fallbackMode]} replace />} />
+                <Route path="/sports-meet" element={canOpenMode("sports-meet") ? <Suspense fallback={routeFallback}><SportsMeetPage /></Suspense> : <Navigate to={MODE_PATH[fallbackMode]} replace />} />
                 <Route path="/analysis" element={canOpenMode("analysis") ? <Suspense fallback={routeFallback}><AnalysisRoutePage /></Suspense> : <Navigate to={MODE_PATH[fallbackMode]} replace />} />
                 <Route path="/scores" element={canOpenMode("scores") ? <Suspense fallback={routeFallback}><ScoresRoutePage /></Suspense> : <Navigate to={MODE_PATH[fallbackMode]} replace />} />
                 <Route path="/account" element={canOpenMode("account") ? <Suspense fallback={routeFallback}><AccountRoutePage /></Suspense> : <Navigate to={MODE_PATH[fallbackMode]} replace />} />

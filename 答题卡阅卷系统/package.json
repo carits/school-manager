@@ -56,6 +56,7 @@
     "verify:recognizer-limits": "tsx 脚本/verify-recognizer-limits.ts",
     "verify:core-logic": "tsx 脚本/verify-core-logic.ts",
     "verify:review-submit": "tsx 脚本/verify-review-submit.ts",
+    "verify:sports-meet": "tsx 脚本/verify-sports-meet.ts",
     "migrate:mariadb": "tsx 脚本/migrate-to-mariadb.ts",
     "migrate:mariadb:dry": "tsx 脚本/migrate-to-mariadb.ts --dry-run",
     "migrate:mariadb:verify": "tsx 脚本/migrate-to-mariadb.ts --verify-only --sample=10",

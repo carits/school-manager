@@ -1219,6 +1219,45 @@ export async function runMariadbMigrations(conn: mariadb.Connection | mariadb.Po
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ] });
 
+  mariadbMigrations.push({ version: 64, name: "sports-meet", sqls: [
+    `CREATE TABLE IF NOT EXISTS sports_meets (
+      id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(200) NOT NULL,
+      start_date VARCHAR(20), end_date VARCHAR(20), status VARCHAR(20) NOT NULL DEFAULT 'draft',
+      scoring_json TEXT NOT NULL, created_by INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS sports_events (
+      id INT AUTO_INCREMENT PRIMARY KEY, meet_id INT NOT NULL, name VARCHAR(120) NOT NULL,
+      kind VARCHAR(20) NOT NULL DEFAULT 'track', result_kind VARCHAR(20) NOT NULL DEFAULT 'time',
+      grade_name VARCHAR(50), gender VARCHAR(20), unit VARCHAR(20) NOT NULL DEFAULT '秒',
+      stage VARCHAR(20) NOT NULL DEFAULT '决赛', schedule_at VARCHAR(30),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (meet_id) REFERENCES sports_meets(id) ON DELETE CASCADE, INDEX idx_sports_events_meet (meet_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS sports_participants (
+      id INT AUTO_INCREMENT PRIMARY KEY, meet_id INT NOT NULL, name VARCHAR(120) NOT NULL,
+      class_name VARCHAR(80) NOT NULL, grade_name VARCHAR(50), gender VARCHAR(20), bib_no VARCHAR(40),
+      participant_type VARCHAR(20) NOT NULL DEFAULT 'individual', team_members_json TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (meet_id) REFERENCES sports_meets(id) ON DELETE CASCADE,
+      INDEX idx_sports_participants_meet (meet_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS sports_heats (
+      id INT AUTO_INCREMENT PRIMARY KEY, event_id INT NOT NULL, stage VARCHAR(20) NOT NULL DEFAULT '决赛',
+      heat_no INT NOT NULL DEFAULT 1, scheduled_at VARCHAR(30), FOREIGN KEY (event_id) REFERENCES sports_events(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS sports_entries (
+      id INT AUTO_INCREMENT PRIMARY KEY, event_id INT NOT NULL, participant_id INT NOT NULL, heat_id INT NULL,
+      lane_no INT NULL, class_name VARCHAR(80) NOT NULL, result_text VARCHAR(40) NOT NULL DEFAULT '',
+      result_value DOUBLE NULL, status VARCHAR(20) NOT NULL DEFAULT 'valid', rank_no INT NULL, points DOUBLE NOT NULL DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_sports_entry (event_id, participant_id, heat_id), INDEX idx_sports_entries_event (event_id),
+      FOREIGN KEY (event_id) REFERENCES sports_events(id) ON DELETE CASCADE,
+      FOREIGN KEY (participant_id) REFERENCES sports_participants(id) ON DELETE CASCADE,
+      FOREIGN KEY (heat_id) REFERENCES sports_heats(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  ] });
+
   for (const m of mariadbMigrations) {
     if (applied.has(m.version)) continue;
     for (const sql of m.sqls) {

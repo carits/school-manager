@@ -113,6 +113,7 @@ import scannerUploadRoutes from "../../../server/routes/scanner-upload";
 import scannerSyncRoutes from "../../../server/routes/scanner-sync";
 import ladderRoutes from "../../../server/routes/ladder";
 import wechatSubscriptionRoutes from "../../../server/routes/wechat-subscriptions";
+import sportsMeetRoutes from "../../../server/routes/sports-meet";
 import { notifyGradeReleaseSubscribers } from "../../../server/services/gradeReleaseNotifications";
 import { logWechatSubscriptionStatus } from "../../../server/services/WechatMiniProgramService";
 import {
@@ -1260,6 +1261,7 @@ export async function createApp(): Promise<express.Express> {
   app.use("/api/users", userRoutes);
   app.use("/api/classes", classRoutes);
   app.use("/api/teachers", teacherRoutes);
+  app.use("/api/sports-meets", sportsMeetRoutes);
   app.use("/api/export", exportScoresRoutes);
   app.use("/api/export", exportRoutes);
   app.use("/api/exam-groups", examGroupRoutes);
