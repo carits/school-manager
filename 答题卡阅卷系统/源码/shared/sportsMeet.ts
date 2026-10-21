@@ -46,7 +46,7 @@ function averagePoints(startRank: number, endRank: number): number {
   return count ? Number((total / count).toFixed(2)) : 0;
 }
 
-export function rankSportsScores(rows: SportsScoreRow[], resultKind: SportsResultKind): RankedSportsScore[] {
+export function rankSportsScores(rows: SportsScoreRow[], resultKind: SportsResultKind = "time"): RankedSportsScore[] {
   const valid = rows
     .filter((row) => row.status === "valid" && row.result !== null && Number.isFinite(row.result))
     .sort((a, b) => resultKind === "time" ? (a.result! - b.result!) : (b.result! - a.result!));
