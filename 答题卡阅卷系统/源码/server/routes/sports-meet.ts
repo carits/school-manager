@@ -1,12 +1,8 @@
 import { Router } from "express";
 import { getMysqlDb, type DbAdapter } from "../db";
-import { authMiddleware, requirePermission } from "../middleware/auth";
-import { PERMISSIONS } from "../auth/permissions";
 import { rankSportsScores, teamPointTotals, parseSportsResult, type SportsEntryStatus, type SportsResultKind, type SportsEventKind } from "../../shared/sportsMeet";
 
 const router = Router();
-router.use(authMiddleware, requirePermission(PERMISSIONS.SYSTEM_MANAGE));
-
 function id(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("无效的 ID");
