@@ -14,6 +14,8 @@ function isScannerBuild(): boolean {
 }
 function getApiBase(): string {
   if (isScannerBuild()) return "";
+  // 独立运动会工作台必须走自己的同源代理，不能被答题卡里保存的旧服务器地址覆盖。
+  if (typeof window !== "undefined" && /^\/sports-meet(?:\/|$)/.test(window.location.pathname)) return "/sports-meet";
   if (typeof window !== "undefined" && /^\/answer-card\/review(?:\/|$)/.test(window.location.pathname)) return "/answer-card";
   if (getViteEnv()?.VITE_LEGACY_ONLY === "1") return "/answer-card/legacy-api";
   const configured = readServerUrl() || (getViteEnv()?.VITE_PROJECTX_API_BASE ?? "").replace(/\/+$/, "");
